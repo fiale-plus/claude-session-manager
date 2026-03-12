@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.reactive import reactive
 
@@ -22,6 +23,12 @@ STATE_CSS_CLASS: dict[SessionState, str] = {
     SessionState.IDLE: "idle",
     SessionState.DEAD: "dead",
 }
+
+# Pulse interval (seconds) — how often the dim class is toggled.
+# autopilot-on: slow pulse (1s on, 1s off = 2s cycle)
+# autopilot-warning: faster pulse (0.5s on, 0.5s off = 1s cycle)
+_PULSE_SLOW_INTERVAL = 1.0
+_PULSE_FAST_INTERVAL = 0.5
 
 
 def _elapsed(dt: datetime | None) -> str:
@@ -52,13 +59,16 @@ class SessionPill(Widget):
     def __init__(self, session: Session, **kwargs) -> None:
         super().__init__(**kwargs)
         self.session = session
+        self._pulse_timer: Timer | None = None
+        self._pulse_dim = False
 
     def render(self) -> str:
         icon = STATE_ICONS.get(self.session.state, "?")
         elapsed = _elapsed(self.session.last_activity_time)
         name = self.session.project_name or self.session.slug or "?"
+        self_tag = " [self]" if self.session.is_self else ""
         ap = " \u25C9" if self.session.autopilot else ""
-        return f" {icon} {name} {elapsed}{ap} "
+        return f" {icon} {name}{self_tag} {elapsed}{ap} "
 
     def watch_selected(self, value: bool) -> None:
         if value:
@@ -76,10 +86,11 @@ class SessionPill(Widget):
         if new_state_class:
             self.add_class(new_state_class)
         self._sync_autopilot_classes()
+        self._sync_pulse_timer()
         self.refresh()
 
     def _sync_autopilot_classes(self) -> None:
-        """Toggle .autopilot-on and .autopilot-warning CSS classes."""
+        """Toggle .autopilot-on, .autopilot-warning, and .self-session CSS classes."""
         if self.session.autopilot:
             self.add_class("autopilot-on")
             if self.session.has_destructive_pending:
@@ -90,8 +101,54 @@ class SessionPill(Widget):
             self.remove_class("autopilot-on")
             self.remove_class("autopilot-warning")
 
+        if self.session.is_self:
+            self.add_class("self-session")
+        else:
+            self.remove_class("self-session")
+
+    def _sync_pulse_timer(self) -> None:
+        """Start, stop, or adjust the pulse timer based on autopilot state."""
+        needs_pulse = self.session.autopilot
+        if self.session.has_destructive_pending:
+            interval = _PULSE_FAST_INTERVAL
+        else:
+            interval = _PULSE_SLOW_INTERVAL
+
+        if needs_pulse:
+            if self._pulse_timer is None:
+                self._pulse_timer = self.set_interval(
+                    interval, self._toggle_pulse, pause=False
+                )
+            else:
+                # Timer already running — no need to recreate for interval
+                # change every update; the visual difference is minor.
+                pass
+        else:
+            self._stop_pulse()
+
+    def _toggle_pulse(self) -> None:
+        """Toggle the dim class for the pulse effect."""
+        self._pulse_dim = not self._pulse_dim
+        if self._pulse_dim:
+            self.add_class("autopilot-pulse-dim")
+        else:
+            self.remove_class("autopilot-pulse-dim")
+
+    def _stop_pulse(self) -> None:
+        """Stop pulse timer and remove dim class."""
+        if self._pulse_timer is not None:
+            self._pulse_timer.stop()
+            self._pulse_timer = None
+        self._pulse_dim = False
+        self.remove_class("autopilot-pulse-dim")
+
     def on_mount(self) -> None:
         state_class = STATE_CSS_CLASS.get(self.session.state)
         if state_class:
             self.add_class(state_class)
         self._sync_autopilot_classes()
+        self._sync_pulse_timer()
+
+    def on_unmount(self) -> None:
+        """Clean up pulse timer on removal."""
+        self._stop_pulse()

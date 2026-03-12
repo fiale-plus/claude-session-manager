@@ -122,6 +122,16 @@ SessionPill.autopilot-warning {
     text-style: bold;
 }
 
+/* ── Autopilot pulse states (toggled by timer in Python) ── */
+SessionPill.autopilot-pulse-dim {
+    opacity: 0.5;
+}
+
+/* ── Self-session indicator ── */
+SessionPill.self-session {
+    text-style: dim;
+}
+
 /* ── Hints bar ── */
 #hints-bar {
     dock: bottom;

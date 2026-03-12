@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
 import time
 from pathlib import Path
@@ -14,8 +15,10 @@ from textual.widgets import Static
 
 from csm import ghostty
 from csm.autopilot import ToolSafety, classify_pending_tools
+from csm.notifications import SessionNotifier
 from csm.parser import extract_pending_tool, read_tail
 from csm.scanner import discover_sessions
+from csm.watcher import Watcher
 from csm.widgets.approval_queue import ApprovalQueue
 from csm.widgets.session_strip import SessionStrip
 from csm.widgets.zoom_panel import ZoomPanel
@@ -27,13 +30,28 @@ HINTS = [
     "'q' to quit",
     "Enter: switch to Ghostty tab",
     "Escape: collapse zoom panel",
-    "Press 'a' to toggle autopilot",
-    "Press 'Q' for approval queue",
-    "Press 'y' to approve pending tool call",
-    "Press 'n' to reject pending tool call",
+    "Press 'a' to toggle autopilot for the selected session",
+    "Press 'Q' for the approval queue overlay",
+    "Press 'y' to approve the pending tool call",
+    "Press 'n' to reject the pending tool call",
+    "Press 'A' to approve all safe tool calls at once",
+    "Autopilot auto-approves safe tools, pauses on destructive ones",
+    "Destructive commands (git push, rm, etc.) always need manual approval",
+    "Sessions marked [self] are this CSM instance",
+    "Strict mode: destructive = git push, rm, npm publish, ...",
 ]
 
 HINT_ROTATE_SECS = 45
+
+# Label appended to the project name of the session running CSM itself.
+SELF_LABEL = " [self]"
+
+
+def _is_self_session(session, own_cwd: str) -> bool:
+    """Return True if *session* belongs to the process running CSM."""
+    if not own_cwd or not session.project_path:
+        return False
+    return session.project_path.rstrip("/") == own_cwd.rstrip("/")
 
 
 class SessionManagerApp(App):
@@ -72,6 +90,12 @@ class SessionManagerApp(App):
         self._sessions: list = []
         # Timestamp of the last auto-approval per session (cooldown guard).
         self._last_approved: dict[str, float] = {}
+        # Incremental file watcher (replaces raw discover_sessions() calls).
+        self._watcher = Watcher()
+        # Desktop notification manager.
+        self._notifier = SessionNotifier()
+        # Our own cwd for self-exclusion marking.
+        self._own_cwd = os.getcwd()
 
     def compose(self) -> ComposeResult:
         yield Static(id="main-area")
@@ -90,17 +114,23 @@ class SessionManagerApp(App):
         self.run_worker(self._poll_sessions_worker, thread=True)
 
     def _poll_sessions_worker(self) -> None:
-        sessions = discover_sessions()
+        sessions = self._watcher.poll()
 
-        # Apply persisted autopilot state to freshly-created Session objects
-        # and pre-compute destructive-pending flag (avoids I/O on main thread).
+        # Apply persisted autopilot state to freshly-created Session objects,
+        # mark self-session, and pre-compute destructive-pending flag.
         for session in sessions:
             if session.session_id in self._autopilot_state:
                 session.autopilot = self._autopilot_state[session.session_id]
 
+            # Self-exclusion: tag sessions running in the same cwd as CSM.
+            if _is_self_session(session, self._own_cwd):
+                session.is_self = True
+
             if session.autopilot:
                 try:
-                    entries = read_tail(session.jsonl_path, n_lines=50)
+                    entries = self._watcher.get_entries(session.jsonl_path)
+                    if not entries:
+                        entries = read_tail(session.jsonl_path, n_lines=50)
                     pending = extract_pending_tool(entries)
                     if pending:
                         classified = classify_pending_tools(pending)
@@ -110,9 +140,17 @@ class SessionManagerApp(App):
                 except Exception:
                     pass
 
+        # Fire desktop notifications for state transitions.
+        self._notifier.check(sessions)
+
         self._sessions = sessions
-        strip = self.query_one(SessionStrip)
-        self.call_from_thread(strip.update_sessions, sessions)
+
+        # Handle empty session list edge case.
+        if not sessions:
+            self.call_from_thread(self._show_empty_state)
+        else:
+            strip = self.query_one(SessionStrip)
+            self.call_from_thread(strip.update_sessions, sessions)
 
         # If zoomed, refresh the zoom panel with the currently selected session
         if self.zoomed:
@@ -125,6 +163,12 @@ class SessionManagerApp(App):
 
         # Run the autopilot loop (auto-approve safe pending tools).
         self._run_autopilot(sessions)
+
+    def _show_empty_state(self) -> None:
+        """Update UI when no sessions are discovered."""
+        strip = self.query_one(SessionStrip)
+        strip.update_sessions([])
+        self._hint("No Claude sessions found. Start a Claude Code session to begin.")
 
     def _run_autopilot(self, sessions: list) -> None:
         """Auto-approve safe/unknown pending tools for sessions with autopilot on."""
@@ -145,7 +189,9 @@ class SessionManagerApp(App):
                 continue
 
             try:
-                entries = read_tail(session.jsonl_path, n_lines=50)
+                entries = self._watcher.get_entries(session.jsonl_path)
+                if not entries:
+                    entries = read_tail(session.jsonl_path, n_lines=50)
                 pending = extract_pending_tool(entries)
             except Exception:
                 continue
@@ -204,13 +250,25 @@ class SessionManagerApp(App):
         """Show a transient hint in the hints bar."""
         self.query_one("#hints-bar", Static).update(text)
 
+    # -- Graceful shutdown --------------------------------------------------
+
+    def action_quit(self) -> None:
+        """Clean up watcher and notifier state, then quit."""
+        self._watcher.clear()
+        self._notifier.clear()
+        super().action_quit()
+
     # ── Actions ──────────────────────────────────────────────
 
     def action_select_next(self) -> None:
         if self.queue_visible:
             self.query_one("#approval-queue", ApprovalQueue).move_down()
             return
-        self.query_one(SessionStrip).select_next()
+        strip = self.query_one(SessionStrip)
+        if not strip._pills:
+            self._hint("No sessions to navigate")
+            return
+        strip.select_next()
         if self.zoomed:
             self._refresh_zoom()
         else:
@@ -220,7 +278,11 @@ class SessionManagerApp(App):
         if self.queue_visible:
             self.query_one("#approval-queue", ApprovalQueue).move_up()
             return
-        self.query_one(SessionStrip).select_prev()
+        strip = self.query_one(SessionStrip)
+        if not strip._pills:
+            self._hint("No sessions to navigate")
+            return
+        strip.select_prev()
         if self.zoomed:
             self._refresh_zoom()
         else:
@@ -353,7 +415,9 @@ class SessionManagerApp(App):
             if not session.ghostty_tab_name:
                 continue
             try:
-                entries = read_tail(session.jsonl_path, n_lines=50)
+                entries = self._watcher.get_entries(session.jsonl_path)
+                if not entries:
+                    entries = read_tail(session.jsonl_path, n_lines=50)
                 pending = extract_pending_tool(entries)
             except Exception:
                 continue

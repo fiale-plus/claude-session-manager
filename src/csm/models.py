@@ -48,3 +48,4 @@ class Session:
     git_branch: str = ""
     autopilot: bool = False
     has_destructive_pending: bool = False
+    is_self: bool = False
