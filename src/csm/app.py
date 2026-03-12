@@ -17,7 +17,6 @@ from csm import ghostty
 from csm.autopilot import ToolSafety, classify_pending_tools
 from csm.notifications import SessionNotifier
 from csm.parser import extract_pending_tool, read_tail
-from csm.scanner import discover_sessions
 from csm.watcher import Watcher
 from csm.widgets.approval_queue import ApprovalQueue
 from csm.widgets.session_strip import SessionStrip

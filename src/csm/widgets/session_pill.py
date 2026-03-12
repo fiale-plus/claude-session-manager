@@ -62,10 +62,15 @@ class SessionPill(Widget):
         self._pulse_timer: Timer | None = None
         self._pulse_dim = False
 
+    # Maximum characters for the project name before truncation.
+    _MAX_NAME_LEN = 20
+
     def render(self) -> str:
         icon = STATE_ICONS.get(self.session.state, "?")
         elapsed = _elapsed(self.session.last_activity_time)
         name = self.session.project_name or self.session.slug or "?"
+        if len(name) > self._MAX_NAME_LEN:
+            name = name[: self._MAX_NAME_LEN - 1] + "\u2026"
         self_tag = " [self]" if self.session.is_self else ""
         ap = " \u25C9" if self.session.autopilot else ""
         return f" {icon} {name}{self_tag} {elapsed}{ap} "
@@ -119,10 +124,15 @@ class SessionPill(Widget):
                 self._pulse_timer = self.set_interval(
                     interval, self._toggle_pulse, pause=False
                 )
-            else:
-                # Timer already running — no need to recreate for interval
-                # change every update; the visual difference is minor.
-                pass
+                self._pulse_interval = interval
+            elif getattr(self, "_pulse_interval", None) != interval:
+                # Interval changed (e.g. warning state toggled) — restart
+                # timer with the correct cadence.
+                self._stop_pulse()
+                self._pulse_timer = self.set_interval(
+                    interval, self._toggle_pulse, pause=False
+                )
+                self._pulse_interval = interval
         else:
             self._stop_pulse()
 
