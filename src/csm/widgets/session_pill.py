@@ -7,7 +7,9 @@ from datetime import datetime
 from textual.widget import Widget
 from textual.reactive import reactive
 
+from csm.autopilot import ToolSafety, classify_pending_tools
 from csm.models import Session, SessionState
+from csm.parser import extract_pending_tool, read_tail
 
 STATE_ICONS: dict[SessionState, str] = {
     SessionState.RUNNING: "\u2699",   # ⚙
@@ -57,9 +59,20 @@ class SessionPill(Widget):
         icon = STATE_ICONS.get(self.session.state, "?")
         elapsed = _elapsed(self.session.last_activity_time)
         name = self.session.project_name or self.session.slug or "?"
-        # Slot for autopilot indicator (Phase 4 will activate)
         ap = " \u25C9" if self.session.autopilot else ""
         return f" {icon} {name} {elapsed}{ap} "
+
+    def _has_destructive_pending(self) -> bool:
+        """Check whether any pending tool for this session is destructive."""
+        try:
+            entries = read_tail(self.session.jsonl_path, n_lines=50)
+            pending = extract_pending_tool(entries)
+            if not pending:
+                return False
+            classified = classify_pending_tools(pending)
+            return any(s == ToolSafety.DESTRUCTIVE for _, _, s in classified)
+        except Exception:
+            return False
 
     def watch_selected(self, value: bool) -> None:
         if value:
@@ -76,9 +89,23 @@ class SessionPill(Widget):
             self.remove_class(old_state_class)
         if new_state_class:
             self.add_class(new_state_class)
+        self._sync_autopilot_classes()
         self.refresh()
+
+    def _sync_autopilot_classes(self) -> None:
+        """Toggle .autopilot-on and .autopilot-warning CSS classes."""
+        if self.session.autopilot:
+            self.add_class("autopilot-on")
+            if self._has_destructive_pending():
+                self.add_class("autopilot-warning")
+            else:
+                self.remove_class("autopilot-warning")
+        else:
+            self.remove_class("autopilot-on")
+            self.remove_class("autopilot-warning")
 
     def on_mount(self) -> None:
         state_class = STATE_CSS_CLASS.get(self.session.state)
         if state_class:
             self.add_class(state_class)
+        self._sync_autopilot_classes()

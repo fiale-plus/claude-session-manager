@@ -38,6 +38,40 @@ Screen {
     color: $text;
 }
 
+/* ── Approval queue ── */
+#approval-queue {
+    display: none;
+    height: auto;
+    min-height: 5;
+    max-height: 16;
+    background: $surface;
+    border-top: solid $primary-background-lighten-2;
+    border-bottom: solid $primary-background-lighten-2;
+    padding: 0 1;
+}
+
+#approval-queue.visible {
+    display: block;
+}
+
+#queue-header {
+    height: 1;
+    color: $text;
+    text-style: bold;
+}
+
+#queue-body {
+    height: auto;
+    max-height: 12;
+    color: $text-muted;
+}
+
+#queue-footer {
+    height: 1;
+    color: $text-muted;
+    text-style: italic;
+}
+
 /* ── Session strip ── */
 SessionStrip {
     dock: bottom;
@@ -76,6 +110,16 @@ SessionPill.dead {
 
 SessionPill.selected {
     text-style: bold reverse;
+}
+
+/* ── Autopilot indicators ── */
+SessionPill.autopilot-on {
+    color: $success;
+}
+
+SessionPill.autopilot-warning {
+    color: #e5a100;
+    text-style: bold;
 }
 
 /* ── Hints bar ── */

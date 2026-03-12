@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 from pathlib import Path
 
@@ -11,22 +12,25 @@ from textual.reactive import reactive
 from textual.widgets import Static
 
 from csm import ghostty
+from csm.autopilot import ToolSafety, classify_pending_tools
+from csm.parser import extract_pending_tool, read_tail
 from csm.scanner import discover_sessions
+from csm.widgets.approval_queue import ApprovalQueue
 from csm.widgets.session_strip import SessionStrip
 from csm.widgets.zoom_panel import ZoomPanel
+
+log = logging.getLogger(__name__)
 
 HINTS = [
     "Arrow keys: navigate sessions",
     "'q' to quit",
     "Enter: switch to Ghostty tab",
     "Escape: collapse zoom panel",
+    "Press 'a' to toggle autopilot",
+    "Press 'Q' for approval queue",
+    "Press 'y' to approve pending tool call",
+    "Press 'n' to reject pending tool call",
 ]
-
-# TODO Phase 4 hints — uncomment as features land:
-# "Press 'a' to toggle autopilot",
-# "Press 'Q' for approval queue",
-# "Press 'y' to approve pending tool call",
-# "Press 'n' to reject pending tool call",
 
 HINT_ROTATE_SECS = 45
 
@@ -41,20 +45,31 @@ class SessionManagerApp(App):
         Binding("left", "select_prev", "Prev session", show=False, priority=True),
         Binding("right", "select_next", "Next session", show=False, priority=True),
         Binding("q", "quit", "Quit"),
-        Binding("enter", "switch_tab", "Switch tab", show=False),
-        Binding("escape", "collapse_zoom", "Collapse", show=False),
-        # Placeholder bindings — Phase 4 will implement these
-        Binding("a", "noop", "Autopilot", show=False),
-        Binding("shift+q", "noop", "Queue", show=False),
-        Binding("y", "noop", "Approve", show=False),
-        Binding("n", "noop", "Reject", show=False),
+        Binding("enter", "switch_tab_or_approve", "Switch tab / Approve", show=False),
+        Binding("escape", "collapse", "Collapse", show=False),
+        Binding("a", "toggle_autopilot", "Autopilot", show=False),
+        Binding("Q", "toggle_queue", "Queue", show=False),
+        Binding("y", "approve", "Approve", show=False),
+        Binding("n", "reject", "Reject", show=False),
+        Binding("A", "approve_all_safe", "Approve all safe", show=False),
+        Binding("up", "queue_up", "Queue up", show=False, priority=True),
+        Binding("down", "queue_down", "Queue down", show=False, priority=True),
     ]
 
     zoomed: reactive[bool] = reactive(False)
+    queue_visible: reactive[bool] = reactive(False)
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        # Per-session autopilot state — survives across Session object recreation.
+        self._autopilot_state: dict[str, bool] = {}
+        # Last known sessions for autopilot loop.
+        self._sessions: list = []
 
     def compose(self) -> ComposeResult:
         yield Static(id="main-area")
         yield ZoomPanel(id="zoom-panel")
+        yield ApprovalQueue(id="approval-queue")
         yield Static(random.choice(HINTS), id="hints-bar")
         yield SessionStrip()
 
@@ -69,11 +84,62 @@ class SessionManagerApp(App):
 
     def _poll_sessions_worker(self) -> None:
         sessions = discover_sessions()
+
+        # Apply persisted autopilot state to freshly-created Session objects.
+        for session in sessions:
+            if session.session_id in self._autopilot_state:
+                session.autopilot = self._autopilot_state[session.session_id]
+
+        self._sessions = sessions
         strip = self.query_one(SessionStrip)
         self.call_from_thread(strip.update_sessions, sessions)
+
         # If zoomed, refresh the zoom panel with the currently selected session
         if self.zoomed:
             self.call_from_thread(self._refresh_zoom)
+
+        # If queue is visible, refresh it
+        if self.queue_visible:
+            queue = self.query_one("#approval-queue", ApprovalQueue)
+            self.call_from_thread(queue.update_queue, sessions)
+
+        # Run the autopilot loop (auto-approve safe pending tools).
+        self._run_autopilot(sessions)
+
+    def _run_autopilot(self, sessions: list) -> None:
+        """Auto-approve safe/unknown pending tools for sessions with autopilot on."""
+        for session in sessions:
+            if not session.autopilot:
+                continue
+            if not session.ghostty_tab_name:
+                continue
+
+            try:
+                entries = read_tail(session.jsonl_path, n_lines=50)
+                pending = extract_pending_tool(entries)
+            except Exception:
+                continue
+
+            if not pending:
+                continue
+
+            classified = classify_pending_tools(pending)
+            # If ALL pending tools are safe or unknown, auto-approve.
+            # If any is destructive, skip — user must manually approve.
+            has_destructive = any(
+                s == ToolSafety.DESTRUCTIVE for _, _, s in classified
+            )
+            if has_destructive:
+                log.debug(
+                    "Autopilot: session %s has destructive pending tool — skipping",
+                    session.session_id,
+                )
+                continue
+
+            # All are safe/unknown — send approval.
+            tab = session.ghostty_tab_name
+            log.debug("Autopilot: auto-approving for session %s", session.session_id)
+            ghostty.send_approval(tab)
 
     def _rotate_hint(self) -> None:
         hints_bar = self.query_one("#hints-bar", Static)
@@ -88,15 +154,31 @@ class SessionManagerApp(App):
         else:
             panel.remove_class("visible")
 
+    def watch_queue_visible(self, value: bool) -> None:
+        """Toggle approval queue visibility."""
+        queue = self.query_one("#approval-queue", ApprovalQueue)
+        if value:
+            queue.add_class("visible")
+            queue.update_queue(self._sessions)
+        else:
+            queue.remove_class("visible")
+
     def _refresh_zoom(self) -> None:
         """Update the zoom panel with the currently selected session."""
         strip = self.query_one(SessionStrip)
         panel = self.query_one("#zoom-panel", ZoomPanel)
         panel.update_session(strip.selected_session)
 
+    def _hint(self, text: str) -> None:
+        """Show a transient hint in the hints bar."""
+        self.query_one("#hints-bar", Static).update(text)
+
     # ── Actions ──────────────────────────────────────────────
 
     def action_select_next(self) -> None:
+        if self.queue_visible:
+            self.query_one("#approval-queue", ApprovalQueue).move_down()
+            return
         self.query_one(SessionStrip).select_next()
         if self.zoomed:
             self._refresh_zoom()
@@ -104,13 +186,31 @@ class SessionManagerApp(App):
             self.zoomed = True
 
     def action_select_prev(self) -> None:
+        if self.queue_visible:
+            self.query_one("#approval-queue", ApprovalQueue).move_up()
+            return
         self.query_one(SessionStrip).select_prev()
         if self.zoomed:
             self._refresh_zoom()
         else:
             self.zoomed = True
 
-    def action_switch_tab(self) -> None:
+    def action_queue_up(self) -> None:
+        if self.queue_visible:
+            self.query_one("#approval-queue", ApprovalQueue).move_up()
+
+    def action_queue_down(self) -> None:
+        if self.queue_visible:
+            self.query_one("#approval-queue", ApprovalQueue).move_down()
+
+    def action_switch_tab_or_approve(self) -> None:
+        """Enter: approve selected queue item, or switch Ghostty tab."""
+        if self.queue_visible:
+            self._approve_queue_selected()
+            return
+        self._switch_tab()
+
+    def _switch_tab(self) -> None:
         """Switch to the Ghostty tab for the selected session."""
         strip = self.query_one(SessionStrip)
         session = strip.selected_session
@@ -122,12 +222,139 @@ class SessionManagerApp(App):
                 thread=True,
             )
         else:
-            hints_bar = self.query_one("#hints-bar", Static)
-            hints_bar.update("No Ghostty tab found for this session")
+            self._hint("No Ghostty tab found for this session")
 
-    def action_collapse_zoom(self) -> None:
-        """Collapse the zoom panel."""
-        self.zoomed = False
+    def action_collapse(self) -> None:
+        """Escape: close queue if visible, otherwise collapse zoom."""
+        if self.queue_visible:
+            self.queue_visible = False
+        else:
+            self.zoomed = False
 
-    def action_noop(self) -> None:
-        """Placeholder for future-phase key bindings."""
+    def action_toggle_autopilot(self) -> None:
+        """Toggle autopilot on the selected session."""
+        strip = self.query_one(SessionStrip)
+        session = strip.selected_session
+        if session is None:
+            self._hint("No session selected")
+            return
+
+        session.autopilot = not session.autopilot
+        self._autopilot_state[session.session_id] = session.autopilot
+
+        state_str = "ON" if session.autopilot else "OFF"
+        name = session.project_name or session.slug or session.session_id
+        self._hint(f"Autopilot {state_str} for {name}")
+
+        # Refresh pill display immediately.
+        strip = self.query_one(SessionStrip)
+        for pill in strip._pills:
+            if pill.session.session_id == session.session_id:
+                pill.update_session(session)
+                break
+
+        if self.zoomed:
+            self._refresh_zoom()
+
+    def action_toggle_queue(self) -> None:
+        """Toggle the approval queue overlay."""
+        self.queue_visible = not self.queue_visible
+
+    def action_approve(self) -> None:
+        """Approve pending tool call on the selected (zoomed) session."""
+        strip = self.query_one(SessionStrip)
+        session = strip.selected_session
+        if session is None:
+            self._hint("No session selected")
+            return
+        if not session.ghostty_tab_name:
+            self._hint("No Ghostty tab for this session")
+            return
+        tab = session.ghostty_tab_name
+        self.run_worker(lambda: ghostty.send_approval(tab), thread=True)
+        name = session.project_name or session.slug or "?"
+        self._hint(f"Approved tool call in {name}")
+
+    def action_reject(self) -> None:
+        """Reject pending tool call on the selected (zoomed) session."""
+        strip = self.query_one(SessionStrip)
+        session = strip.selected_session
+        if session is None:
+            self._hint("No session selected")
+            return
+        if not session.ghostty_tab_name:
+            self._hint("No Ghostty tab for this session")
+            return
+        tab = session.ghostty_tab_name
+        self.run_worker(lambda: ghostty.send_rejection(tab), thread=True)
+        name = session.project_name or session.slug or "?"
+        self._hint(f"Rejected tool call in {name}")
+
+    def action_approve_all_safe(self) -> None:
+        """Approve all safe pending tools across all sessions."""
+        if self.queue_visible:
+            queue = self.query_one("#approval-queue", ApprovalQueue)
+            rows = queue.get_all_safe_rows()
+            if not rows:
+                self._hint("No safe pending tools to approve")
+                return
+            # Approve each in a background worker (sequentially to avoid
+            # tab-switching conflicts).
+            def _bulk_approve():
+                count = 0
+                seen_tabs: set[str] = set()
+                for row in rows:
+                    tab = row.session.ghostty_tab_name
+                    if not tab or tab in seen_tabs:
+                        continue
+                    seen_tabs.add(tab)
+                    ghostty.send_approval(tab)
+                    count += 1
+                return count
+
+            self.run_worker(_bulk_approve, thread=True)
+            self._hint(f"Approving {len(rows)} safe tool call(s)...")
+            return
+
+        # Fallback: approve all safe across all known sessions.
+        count = 0
+        for session in self._sessions:
+            if not session.ghostty_tab_name:
+                continue
+            try:
+                entries = read_tail(session.jsonl_path, n_lines=50)
+                pending = extract_pending_tool(entries)
+            except Exception:
+                continue
+            if not pending:
+                continue
+            classified = classify_pending_tools(pending)
+            if any(s == ToolSafety.DESTRUCTIVE for _, _, s in classified):
+                continue
+            tab = session.ghostty_tab_name
+
+            def _approve(t=tab):
+                ghostty.send_approval(t)
+
+            self.run_worker(_approve, thread=True)
+            count += 1
+
+        if count:
+            self._hint(f"Approving safe tools in {count} session(s)...")
+        else:
+            self._hint("No safe pending tools to approve")
+
+    def _approve_queue_selected(self) -> None:
+        """Approve the currently selected row in the approval queue."""
+        queue = self.query_one("#approval-queue", ApprovalQueue)
+        row = queue.approve_selected()
+        if row is None:
+            self._hint("Nothing to approve")
+            return
+        tab = row.session.ghostty_tab_name
+        if not tab:
+            self._hint("No Ghostty tab for this session")
+            return
+        self.run_worker(lambda: ghostty.send_approval(tab), thread=True)
+        name = row.session.project_name or row.session.slug or "?"
+        self._hint(f"Approved {row.tool_name} in {name}")

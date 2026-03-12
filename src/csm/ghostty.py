@@ -137,6 +137,63 @@ def switch_to_tab(tab_name: str) -> bool:
     return result is not None
 
 
+def _get_selected_tab_name() -> str | None:
+    """Return the name of the currently selected tab, or None."""
+    tabs = get_tabs()
+    for tab in tabs:
+        if tab.selected:
+            return tab.name
+    return None
+
+
+def send_approval(tab_name: str) -> bool:
+    """Send 'y' + Enter to approve a tool call in a Ghostty tab.
+
+    Flow: switch to target tab -> brief pause -> keystroke 'y' + Enter
+          -> switch back to the original tab.
+    Total ~300-500ms.  Returns True on success.
+    """
+    return _send_keystroke(tab_name, "y")
+
+
+def send_rejection(tab_name: str) -> bool:
+    """Send 'n' + Enter to reject a tool call in a Ghostty tab.
+
+    Same flow as send_approval but with 'n'.
+    """
+    return _send_keystroke(tab_name, "n")
+
+
+def _send_keystroke(tab_name: str, key: str) -> bool:
+    """Switch to *tab_name*, send *key* + Return, then switch back."""
+    original = _get_selected_tab_name()
+
+    safe_name = tab_name.replace("\\", "\\\\").replace('"', '\\"')
+    safe_original = ""
+    if original and original != tab_name:
+        safe_original = original.replace("\\", "\\\\").replace('"', '\\"')
+
+    # Build a single AppleScript that:
+    # 1. Switches to the target tab
+    # 2. Sends the keystroke
+    # 3. Switches back (if we had a different original tab)
+    lines = [
+        'tell application "System Events" to tell process "Ghostty"',
+        f'    click radio button "{safe_name}" of tab group 1 of window 1',
+        f'    delay 0.15',
+        f'    keystroke "{key}"',
+        f'    keystroke return',
+    ]
+    if safe_original:
+        lines.append(f'    delay 0.15')
+        lines.append(f'    click radio button "{safe_original}" of tab group 1 of window 1')
+    lines.append("end tell")
+
+    script = "\n".join(lines)
+    result = _run_osascript(script)
+    return result is not None
+
+
 def invalidate_cache() -> None:
     """Force the next get_tabs() call to re-query Ghostty."""
     global _tab_cache, _tab_cache_time
