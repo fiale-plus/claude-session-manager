@@ -104,7 +104,20 @@ class SessionManagerApp(App):
         yield SessionStrip()
 
     def on_mount(self) -> None:
-        self.poll_sessions()
+        # Synchronous first load so the strip isn't empty on launch.
+        try:
+            sessions = self._watcher.poll()
+            own_cwd = self._own_cwd
+            for s in sessions:
+                if _is_self_session(s, own_cwd):
+                    s.is_self = True
+            self._sessions = sessions
+            if sessions:
+                self.query_one(SessionStrip).update_sessions(sessions)
+            else:
+                self._show_empty_state()
+        except Exception:
+            pass
         self.set_interval(2, self.poll_sessions)
         self.set_interval(HINT_ROTATE_SECS, self._rotate_hint)
 
@@ -251,11 +264,11 @@ class SessionManagerApp(App):
 
     # -- Graceful shutdown --------------------------------------------------
 
-    def action_quit(self) -> None:
+    async def action_quit(self) -> None:
         """Clean up watcher and notifier state, then quit."""
         self._watcher.clear()
         self._notifier.clear()
-        super().action_quit()
+        await super().action_quit()
 
     # ── Actions ──────────────────────────────────────────────
 
