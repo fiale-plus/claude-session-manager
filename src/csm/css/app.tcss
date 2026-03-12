@@ -4,6 +4,40 @@ Screen {
     layout: vertical;
 }
 
+/* ── Zoom panel ── */
+#zoom-panel {
+    display: none;
+    height: 10;
+    min-height: 10;
+    max-height: 10;
+    background: $surface;
+    border-top: solid $primary-background-lighten-2;
+    border-bottom: solid $primary-background-lighten-2;
+    padding: 0 1;
+}
+
+#zoom-panel.visible {
+    display: block;
+}
+
+#zoom-header {
+    height: 1;
+    color: $text;
+    text-style: bold;
+}
+
+#zoom-activity {
+    height: auto;
+    max-height: 6;
+    color: $text-muted;
+}
+
+#zoom-motivation {
+    height: auto;
+    max-height: 3;
+    color: $text;
+}
+
 /* ── Session strip ── */
 SessionStrip {
     dock: bottom;

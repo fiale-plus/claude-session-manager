@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
 import psutil
 
+from csm import ghostty
 from csm.models import Session, SessionState
 from csm.parser import (
     detect_state,
@@ -15,6 +17,8 @@ from csm.parser import (
     extract_session_metadata,
     read_tail,
 )
+
+log = logging.getLogger(__name__)
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 RECENT_THRESHOLD_HOURS = 24
@@ -189,6 +193,9 @@ def discover_sessions() -> list[Session]:
 
             sessions.append(session)
 
+    # --- Phase 3: Correlate with Ghostty tabs ---
+    _correlate_ghostty_tabs(sessions)
+
     # Sort: running first, then by last activity time descending
     state_order = {
         SessionState.RUNNING: 0,
@@ -204,3 +211,31 @@ def discover_sessions() -> list[Session]:
     )
 
     return sessions
+
+
+def _correlate_ghostty_tabs(sessions: list[Session]) -> None:
+    """Match sessions to Ghostty tabs by comparing working directories."""
+    try:
+        tabs = ghostty.get_tabs()
+    except Exception:
+        log.debug("Failed to get Ghostty tabs", exc_info=True)
+        return
+
+    if not tabs:
+        return
+
+    # Build a lookup: normalized working_directory -> tab
+    dir_to_tab: dict[str, ghostty.GhosttyTab] = {}
+    for tab in tabs:
+        wd = tab.working_directory.rstrip("/")
+        if wd:
+            dir_to_tab[wd] = tab
+
+    for session in sessions:
+        project_path = session.project_path.rstrip("/")
+        if not project_path:
+            continue
+        tab = dir_to_tab.get(project_path)
+        if tab is not None:
+            session.ghostty_tab_name = tab.name
+            session.ghostty_tab_index = tab.index
