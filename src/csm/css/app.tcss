@@ -1,0 +1,60 @@
+/* Claude Session Manager — TUI stylesheet */
+
+Screen {
+    layout: vertical;
+}
+
+/* ── Session strip ── */
+SessionStrip {
+    dock: bottom;
+    height: 3;
+    min-height: 3;
+    max-height: 3;
+    background: $surface;
+    border-top: solid $primary-background-lighten-2;
+}
+
+/* ── Session pills ── */
+SessionPill {
+    width: auto;
+    height: 1;
+    min-width: 12;
+    padding: 0 1;
+    margin: 1 0 0 1;
+    color: $text-muted;
+}
+
+SessionPill.running {
+    color: $success;
+}
+
+SessionPill.waiting {
+    color: #e5a100;
+}
+
+SessionPill.idle {
+    color: $text-muted;
+}
+
+SessionPill.dead {
+    color: $text-disabled;
+}
+
+SessionPill.selected {
+    text-style: bold reverse;
+}
+
+/* ── Hints bar ── */
+#hints-bar {
+    dock: bottom;
+    height: 1;
+    background: $primary-background;
+    color: $text-muted;
+    text-align: center;
+    padding: 0 1;
+}
+
+/* ── Main area placeholder ── */
+#main-area {
+    height: 1fr;
+}

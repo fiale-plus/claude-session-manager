@@ -57,7 +57,9 @@ def main():
         print(json.dumps(output, indent=2))
         sys.exit(0)
 
-    print("TUI coming soon")
+    from csm.app import SessionManagerApp
+
+    SessionManagerApp().run()
 
 
 if __name__ == "__main__":
