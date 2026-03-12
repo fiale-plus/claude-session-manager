@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 
@@ -13,6 +14,7 @@ CACHE_TTL_SECS = 10
 
 _tab_cache: list[GhosttyTab] | None = None
 _tab_cache_time: float = 0.0
+_cache_lock = threading.Lock()
 
 
 @dataclass
@@ -74,14 +76,14 @@ def get_tabs(*, force: bool = False) -> list[GhosttyTab]:
     """
     global _tab_cache, _tab_cache_time
 
-    now = time.monotonic()
-    if not force and _tab_cache is not None and (now - _tab_cache_time) < CACHE_TTL_SECS:
-        return _tab_cache
+    with _cache_lock:
+        now = time.monotonic()
+        if not force and _tab_cache is not None and (now - _tab_cache_time) < CACHE_TTL_SECS:
+            return _tab_cache
 
     raw = _run_osascript(_ENUMERATE_SCRIPT)
     if raw is None:
-        _tab_cache = []
-        _tab_cache_time = now
+        # Don't cache failures — next poll will retry immediately.
         return []
 
     tabs: list[GhosttyTab] = []
@@ -112,8 +114,9 @@ def get_tabs(*, force: bool = False) -> list[GhosttyTab]:
             working_directory=working_dir,
         ))
 
-    _tab_cache = tabs
-    _tab_cache_time = now
+    with _cache_lock:
+        _tab_cache = tabs
+        _tab_cache_time = time.monotonic()
     return tabs
 
 
@@ -137,5 +140,6 @@ def switch_to_tab(tab_name: str) -> bool:
 def invalidate_cache() -> None:
     """Force the next get_tabs() call to re-query Ghostty."""
     global _tab_cache, _tab_cache_time
-    _tab_cache = None
-    _tab_cache_time = 0.0
+    with _cache_lock:
+        _tab_cache = None
+        _tab_cache_time = 0.0

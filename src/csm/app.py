@@ -67,7 +67,7 @@ class SessionManagerApp(App):
         """Discover sessions off the main thread, then update the strip."""
         self.run_worker(self._poll_sessions_worker, thread=True)
 
-    async def _poll_sessions_worker(self) -> None:
+    def _poll_sessions_worker(self) -> None:
         sessions = discover_sessions()
         strip = self.query_one(SessionStrip)
         self.call_from_thread(strip.update_sessions, sessions)
@@ -98,13 +98,17 @@ class SessionManagerApp(App):
 
     def action_select_next(self) -> None:
         self.query_one(SessionStrip).select_next()
-        self.zoomed = True
-        self._refresh_zoom()
+        if self.zoomed:
+            self._refresh_zoom()
+        else:
+            self.zoomed = True
 
     def action_select_prev(self) -> None:
         self.query_one(SessionStrip).select_prev()
-        self.zoomed = True
-        self._refresh_zoom()
+        if self.zoomed:
+            self._refresh_zoom()
+        else:
+            self.zoomed = True
 
     def action_switch_tab(self) -> None:
         """Switch to the Ghostty tab for the selected session."""
@@ -117,6 +121,9 @@ class SessionManagerApp(App):
                 lambda: ghostty.switch_to_tab(session.ghostty_tab_name),
                 thread=True,
             )
+        else:
+            hints_bar = self.query_one("#hints-bar", Static)
+            hints_bar.update("No Ghostty tab found for this session")
 
     def action_collapse_zoom(self) -> None:
         """Collapse the zoom panel."""

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual.containers import Vertical
 from textual.widgets import Static
 
@@ -48,7 +50,7 @@ class ZoomPanel(Vertical):
         name = session.project_name or session.slug or "?"
         path_display = session.project_path
         # Shorten home prefix
-        home = str(__import__("pathlib").Path.home())
+        home = str(Path.home())
         if path_display.startswith(home):
             path_display = "~" + path_display[len(home):]
         branch = f"  ({session.git_branch})" if session.git_branch else ""
