@@ -47,3 +47,4 @@ class Session:
     pid: int | None = None
     git_branch: str = ""
     autopilot: bool = False
+    has_destructive_pending: bool = False

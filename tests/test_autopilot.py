@@ -25,23 +25,33 @@ class TestSafeToolNames:
             "TaskList",
             "TaskGet",
             "TaskOutput",
+            "TaskStop",
             "Skill",
             "ExitPlanMode",
             "EnterPlanMode",
             "NotebookEdit",
             "LSP",
             "AskUserQuestion",
+            "ToolSearch",
+            "WebFetch",
+            "WebSearch",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "EnterWorktree",
+            "ExitWorktree",
         ],
     )
     def test_known_safe_tools(self, tool_name: str):
         result = classify_tool(tool_name, {})
         assert result == ToolSafety.SAFE
 
-    def test_unknown_tool_name_is_destructive(self):
-        assert classify_tool("SomeNewTool", {}) == ToolSafety.DESTRUCTIVE
+    def test_unknown_tool_name_is_unknown(self):
+        """Unrecognised CC tool names fall to UNKNOWN, not DESTRUCTIVE."""
+        assert classify_tool("SomeNewTool", {}) == ToolSafety.UNKNOWN
 
-    def test_empty_tool_name_is_destructive(self):
-        assert classify_tool("", {}) == ToolSafety.DESTRUCTIVE
+    def test_empty_tool_name_is_unknown(self):
+        assert classify_tool("", {}) == ToolSafety.UNKNOWN
 
 
 # ── Safe Bash commands ───────────────────────────────────────────
@@ -144,6 +154,15 @@ class TestDestructiveBashCommands:
             "DELETE FROM users WHERE id=1",
             "git push --force origin main",
             "git commit --no-verify -m 'skip hooks'",
+            # Package manager publish/deploy/uninstall
+            "npm publish",
+            "npm publish --access public",
+            "npm unpublish my-package",
+            "npm run deploy",
+            "cargo publish",
+            "cargo publish --dry-run",
+            "pip uninstall requests",
+            "pip3 uninstall -y requests",
         ],
     )
     def test_destructive_bash_commands(self, command: str):
@@ -157,6 +176,15 @@ class TestDestructiveBashCommands:
     def test_force_flag_anywhere(self):
         assert classify_tool("Bash", {"command": "npm install --force"}) == ToolSafety.DESTRUCTIVE
 
+    def test_force_flag_at_end_of_command(self):
+        """--force at the very end of a command (no trailing space)."""
+        assert classify_tool("Bash", {"command": "git push --force"}) == ToolSafety.DESTRUCTIVE
+
+    def test_force_hyphenated_is_not_destructive(self):
+        """--force-redirect, --force-with-lease etc. should NOT match --force."""
+        assert classify_tool("Bash", {"command": "curl --force-redirect http://x"}) != ToolSafety.DESTRUCTIVE
+        assert classify_tool("Bash", {"command": "npm run build --force-clean"}) != ToolSafety.DESTRUCTIVE
+
     def test_destructive_overrides_safe_prefix(self):
         """Even if the command starts with a safe prefix, destructive patterns win."""
         # git add . && git push
@@ -166,6 +194,15 @@ class TestDestructiveBashCommands:
     def test_git_checkout_double_dash_is_destructive(self):
         """git checkout -- <file> discards changes, should be destructive."""
         assert classify_tool("Bash", {"command": "git checkout -- src/app.py"}) == ToolSafety.DESTRUCTIVE
+
+    def test_npm_publish_overrides_safe_prefix(self):
+        """npm publish is destructive even though npm is a safe prefix."""
+        assert classify_tool("Bash", {"command": "npm publish"}) == ToolSafety.DESTRUCTIVE
+
+    def test_pip_uninstall_overrides_safe_prefix(self):
+        """pip uninstall is destructive even though pip is a safe prefix."""
+        assert classify_tool("Bash", {"command": "pip uninstall flask"}) == ToolSafety.DESTRUCTIVE
+        assert classify_tool("Bash", {"command": "pip3 uninstall flask"}) == ToolSafety.DESTRUCTIVE
 
 
 # ── Unknown Bash commands ────────────────────────────────────────

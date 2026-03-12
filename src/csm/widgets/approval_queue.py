@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from textual.containers import Vertical
 from textual.message import Message
 from textual.reactive import reactive
@@ -141,24 +143,15 @@ class ApprovalQueue(Vertical):
         return len(self._rows)
 
 
+@dataclass(slots=True)
 class _QueueRow:
     """Internal data holder for one queue entry."""
 
-    __slots__ = ("session", "tool_name", "tool_input", "safety", "auto_approved")
-
-    def __init__(
-        self,
-        session: Session,
-        tool_name: str,
-        tool_input: dict,
-        safety: ToolSafety,
-        auto_approved: bool,
-    ) -> None:
-        self.session = session
-        self.tool_name = tool_name
-        self.tool_input = tool_input
-        self.safety = safety
-        self.auto_approved = auto_approved
+    session: Session
+    tool_name: str
+    tool_input: dict
+    safety: ToolSafety
+    auto_approved: bool
 
 
 def _safety_icon(safety: ToolSafety, auto_approved: bool) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -59,12 +60,18 @@ class SessionManagerApp(App):
     zoomed: reactive[bool] = reactive(False)
     queue_visible: reactive[bool] = reactive(False)
 
+    # Cooldown (seconds) between autopilot approvals for the same session.
+    # Gives CC time to process and write to JSONL before we re-poll.
+    _AUTOPILOT_COOLDOWN = 10.0
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         # Per-session autopilot state — survives across Session object recreation.
         self._autopilot_state: dict[str, bool] = {}
         # Last known sessions for autopilot loop.
         self._sessions: list = []
+        # Timestamp of the last auto-approval per session (cooldown guard).
+        self._last_approved: dict[str, float] = {}
 
     def compose(self) -> ComposeResult:
         yield Static(id="main-area")
@@ -85,10 +92,23 @@ class SessionManagerApp(App):
     def _poll_sessions_worker(self) -> None:
         sessions = discover_sessions()
 
-        # Apply persisted autopilot state to freshly-created Session objects.
+        # Apply persisted autopilot state to freshly-created Session objects
+        # and pre-compute destructive-pending flag (avoids I/O on main thread).
         for session in sessions:
             if session.session_id in self._autopilot_state:
                 session.autopilot = self._autopilot_state[session.session_id]
+
+            if session.autopilot:
+                try:
+                    entries = read_tail(session.jsonl_path, n_lines=50)
+                    pending = extract_pending_tool(entries)
+                    if pending:
+                        classified = classify_pending_tools(pending)
+                        session.has_destructive_pending = any(
+                            s == ToolSafety.DESTRUCTIVE for _, _, s in classified
+                        )
+                except Exception:
+                    pass
 
         self._sessions = sessions
         strip = self.query_one(SessionStrip)
@@ -108,10 +128,20 @@ class SessionManagerApp(App):
 
     def _run_autopilot(self, sessions: list) -> None:
         """Auto-approve safe/unknown pending tools for sessions with autopilot on."""
+        now = time.monotonic()
         for session in sessions:
             if not session.autopilot:
                 continue
             if not session.ghostty_tab_name:
+                continue
+
+            # Cooldown: skip if we recently sent an approval for this session.
+            last_ts = self._last_approved.get(session.session_id, 0.0)
+            if now - last_ts < self._AUTOPILOT_COOLDOWN:
+                log.debug(
+                    "Autopilot: session %s still in cooldown — skipping",
+                    session.session_id,
+                )
                 continue
 
             try:
@@ -140,6 +170,7 @@ class SessionManagerApp(App):
             tab = session.ghostty_tab_name
             log.debug("Autopilot: auto-approving for session %s", session.session_id)
             ghostty.send_approval(tab)
+            self._last_approved[session.session_id] = now
 
     def _rotate_hint(self) -> None:
         hints_bar = self.query_one("#hints-bar", Static)

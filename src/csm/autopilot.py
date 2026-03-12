@@ -25,12 +25,21 @@ _SAFE_TOOL_NAMES: frozenset[str] = frozenset({
     "TaskList",
     "TaskGet",
     "TaskOutput",
+    "TaskStop",
     "Skill",
     "ExitPlanMode",
     "EnterPlanMode",
     "NotebookEdit",
     "LSP",
     "AskUserQuestion",
+    "ToolSearch",
+    "WebFetch",
+    "WebSearch",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "EnterWorktree",
+    "ExitWorktree",
 })
 
 # Bash command prefixes considered safe (read-only, dev-tooling, or
@@ -110,8 +119,14 @@ _DESTRUCTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bkill\b"),
     re.compile(r"\bDROP\b"),
     re.compile(r"\bDELETE\s+FROM\b"),
-    re.compile(r"--force\b"),
+    re.compile(r"--force(?![-\w])"),
     re.compile(r"--no-verify\b"),
+    # Package manager publish/deploy — these are side-effecting and irreversible.
+    re.compile(r"\bnpm\s+publish\b"),
+    re.compile(r"\bnpm\s+unpublish\b"),
+    re.compile(r"\bnpm\s+run\s+deploy\b"),
+    re.compile(r"\bcargo\s+publish\b"),
+    re.compile(r"\bpip3?\s+uninstall\b"),
 )
 
 # "git checkout <branch>" (without "--") is safe; handled by checking
@@ -122,9 +137,9 @@ _SAFE_GIT_CHECKOUT_RE = re.compile(r"^git\s+checkout\s+(?!--)(\S+)")
 def classify_tool(tool_name: str, tool_input: dict) -> ToolSafety:
     """Classify a CC tool call as safe, destructive, or unknown.
 
-    - DESTRUCTIVE: Bash commands matching the blocklist, or unrecognised tool names.
+    - DESTRUCTIVE: Bash commands matching the blocklist.
     - SAFE: Known tool names or Bash commands matching the safe-prefix list.
-    - UNKNOWN: Bash commands not matching either list.
+    - UNKNOWN: Unrecognised tool names, or Bash commands not matching either list.
     """
     if tool_name == "Bash":
         return _classify_bash(tool_input)
@@ -132,8 +147,10 @@ def classify_tool(tool_name: str, tool_input: dict) -> ToolSafety:
     if tool_name in _SAFE_TOOL_NAMES:
         return ToolSafety.SAFE
 
-    # Unrecognised tool name — treat as destructive.
-    return ToolSafety.DESTRUCTIVE
+    # Unrecognised tool name — treat as unknown (auto-approvable).
+    # CC tools are sandboxed; new ones are overwhelmingly read-only or
+    # low-risk, so blocking on every unknown name is too noisy.
+    return ToolSafety.UNKNOWN
 
 
 def _classify_bash(tool_input: dict) -> ToolSafety:
