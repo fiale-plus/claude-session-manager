@@ -154,7 +154,8 @@ def detect_state(entries: list[dict]) -> SessionState:
         return SessionState.WAITING
 
     # Walk backward to find the latest assistant or non-tool-result user
-    for entry in reversed(meaningful):
+    for i, entry in enumerate(reversed(meaningful)):
+        idx = len(meaningful) - 1 - i
         t = entry.get("type")
 
         if t == "assistant" and _has_tool_use(entry):
@@ -165,7 +166,6 @@ def detect_state(entries: list[dict]) -> SessionState:
                     tool_ids.add(c.get("id"))
 
             # Look for matching tool_results after this entry
-            idx = meaningful.index(entry)
             has_result = False
             for later in meaningful[idx + 1:]:
                 if _is_tool_result(later):
@@ -306,11 +306,12 @@ def _summarize_tool_input(tool_name: str, tool_input: dict) -> str:
     return ""
 
 
-def extract_pending_tool(entries: list[dict]) -> tuple[str, dict] | None:
-    """Find a tool_use that has no matching tool_result.
+def extract_pending_tool(entries: list[dict]) -> list[tuple[str, dict]]:
+    """Find all tool_use blocks that have no matching tool_result.
 
-    Returns (tool_name, tool_input) or None.
+    Returns list of (tool_name, tool_input) tuples (empty list if none pending).
     Needed for autopilot to know what's pending approval.
+    CC can batch multiple tool_use blocks in a single assistant message.
     """
     # Collect all tool_use IDs and their info
     pending: dict[str, tuple[str, dict]] = {}
@@ -332,12 +333,7 @@ def extract_pending_tool(entries: list[dict]) -> tuple[str, dict] | None:
                         result_id = block.get("tool_use_id", "")
                         pending.pop(result_id, None)
 
-    if not pending:
-        return None
-
-    # Return the last pending tool
-    last_id = list(pending.keys())[-1]
-    return pending[last_id]
+    return list(pending.values())
 
 
 def extract_session_metadata(entries: list[dict]) -> dict:

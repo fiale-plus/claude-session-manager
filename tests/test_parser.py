@@ -186,19 +186,39 @@ class TestExtractPendingTool:
     def test_finds_pending_tool(self):
         entries = _load_fixture("running_tool_pending.jsonl")
         result = extract_pending_tool(entries)
-        assert result is not None
-        name, input_data = result
+        assert len(result) == 1
+        name, input_data = result[0]
         assert name == "Bash"
         assert "pytest" in input_data.get("command", "")
 
     def test_no_pending_when_all_resolved(self):
         entries = _load_fixture("sample_session.jsonl")
         result = extract_pending_tool(entries)
-        assert result is None
+        assert result == []
 
     def test_no_pending_on_empty(self):
         result = extract_pending_tool([])
-        assert result is None
+        assert result == []
+
+    def test_returns_multiple_pending_tools(self):
+        """CC can batch multiple tool_use blocks; all pending should be returned."""
+        entries = [
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/a.py"}},
+                        {"type": "tool_use", "id": "t2", "name": "Read", "input": {"file_path": "/b.py"}},
+                    ],
+                },
+                "timestamp": "2026-03-12T10:00:00.000Z",
+            }
+        ]
+        result = extract_pending_tool(entries)
+        assert len(result) == 2
+        names = [name for name, _ in result]
+        assert names == ["Read", "Read"]
 
 
 # --- extract_session_metadata ---

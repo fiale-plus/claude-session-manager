@@ -6,10 +6,11 @@ import argparse
 import json
 import sys
 
+from csm.models import Session
 from csm.scanner import discover_sessions
 
 
-def _session_to_dict(session) -> dict:
+def _session_to_dict(session: Session) -> dict:
     """Convert a Session to a JSON-serializable dict."""
     return {
         "session_id": session.session_id,
