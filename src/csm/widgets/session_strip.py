@@ -12,15 +12,6 @@ from csm.widgets.session_pill import SessionPill
 class SessionStrip(HorizontalScroll):
     """Horizontally-scrollable row of SessionPill widgets, docked to bottom."""
 
-    DEFAULT_CSS = """
-    SessionStrip {
-        dock: bottom;
-        height: 3;
-        min-height: 3;
-        max-height: 3;
-    }
-    """
-
     can_focus = False
 
     selected_index: reactive[int] = reactive(0)
@@ -71,7 +62,7 @@ class SessionStrip(HorizontalScroll):
             pill.selected = i == self.selected_index
         # Scroll the selected pill into view
         if self._pills and 0 <= self.selected_index < len(self._pills):
-            self._pills[self.selected_index].scroll_visible()
+            self._pills[self.selected_index].scroll_visible(animate=False)
 
     def select_next(self) -> None:
         if self._pills:

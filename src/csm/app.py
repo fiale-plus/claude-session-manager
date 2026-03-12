@@ -7,23 +7,23 @@ from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.reactive import reactive
 from textual.widgets import Static
 
-from csm.models import Session
 from csm.scanner import discover_sessions
 from csm.widgets.session_strip import SessionStrip
 
 HINTS = [
     "Arrow keys: navigate sessions",
-    "Press 'a' to toggle autopilot",
-    "Press 'Q' for approval queue",
-    "Press Enter to zoom into session",
-    "Press Escape to collapse detail",
-    "Press 'y' to approve pending tool call",
-    "Press 'n' to reject pending tool call",
     "'q' to quit",
 ]
+
+# TODO Phase 3/4 hints — uncomment as features land:
+# "Press Enter to zoom into session",
+# "Press Escape to collapse detail",
+# "Press 'a' to toggle autopilot",
+# "Press 'Q' for approval queue",
+# "Press 'y' to approve pending tool call",
+# "Press 'n' to reject pending tool call",
 
 HINT_ROTATE_SECS = 45
 
@@ -47,9 +47,6 @@ class SessionManagerApp(App):
         Binding("n", "noop", "Reject", show=False),
     ]
 
-    sessions: reactive[list[Session]] = reactive(list, always_update=True)
-    selected_index: reactive[int] = reactive(0)
-
     def compose(self) -> ComposeResult:
         yield Static(id="main-area")
         yield Static(random.choice(HINTS), id="hints-bar")
@@ -61,10 +58,13 @@ class SessionManagerApp(App):
         self.set_interval(HINT_ROTATE_SECS, self._rotate_hint)
 
     def poll_sessions(self) -> None:
-        """Discover sessions and push them to the strip."""
-        self.sessions = discover_sessions()
+        """Discover sessions off the main thread, then update the strip."""
+        self.run_worker(self._poll_sessions_worker, thread=True)
+
+    async def _poll_sessions_worker(self) -> None:
+        sessions = discover_sessions()
         strip = self.query_one(SessionStrip)
-        strip.update_sessions(self.sessions)
+        self.call_from_thread(strip.update_sessions, sessions)
 
     def _rotate_hint(self) -> None:
         hints_bar = self.query_one("#hints-bar", Static)

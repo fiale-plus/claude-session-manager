@@ -47,15 +47,6 @@ def _elapsed(dt: datetime | None) -> str:
 class SessionPill(Widget):
     """Compact badge showing one session's status."""
 
-    DEFAULT_CSS = """
-    SessionPill {
-        width: auto;
-        height: 1;
-        min-width: 12;
-        padding: 0 1;
-    }
-    """
-
     selected: reactive[bool] = reactive(False)
 
     def __init__(self, session: Session, **kwargs) -> None:
