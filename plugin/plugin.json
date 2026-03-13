@@ -1,0 +1,5 @@
+{
+  "name": "csm",
+  "description": "Claude Session Manager — autopilot daemon integration",
+  "version": "0.1.0"
+}

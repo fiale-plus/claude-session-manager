@@ -1,0 +1,145 @@
+/* Claude Session Manager — TUI stylesheet */
+
+Screen {
+    layout: vertical;
+}
+
+/* ── Zoom panel ── */
+#zoom-panel {
+    display: none;
+    height: 10;
+    min-height: 10;
+    max-height: 10;
+    background: $surface;
+    border-top: solid $primary-background-lighten-2;
+    border-bottom: solid $primary-background-lighten-2;
+    padding: 0 1;
+}
+
+#zoom-panel.visible {
+    display: block;
+}
+
+#zoom-header {
+    height: 1;
+    color: $text;
+    text-style: bold;
+}
+
+#zoom-activity {
+    height: auto;
+    max-height: 6;
+    color: $text-muted;
+}
+
+#zoom-motivation {
+    height: auto;
+    max-height: 3;
+    color: $text;
+}
+
+/* ── Approval queue ── */
+#approval-queue {
+    display: none;
+    height: auto;
+    min-height: 5;
+    max-height: 16;
+    background: $surface;
+    border-top: solid $primary-background-lighten-2;
+    border-bottom: solid $primary-background-lighten-2;
+    padding: 0 1;
+}
+
+#approval-queue.visible {
+    display: block;
+}
+
+#queue-header {
+    height: 1;
+    color: $text;
+    text-style: bold;
+}
+
+#queue-body {
+    height: auto;
+    max-height: 12;
+    color: $text-muted;
+}
+
+#queue-footer {
+    height: 1;
+    color: $text-muted;
+    text-style: italic;
+}
+
+/* ── Session strip ── */
+SessionStrip {
+    dock: bottom;
+    height: 3;
+    min-height: 3;
+    max-height: 3;
+    background: $surface;
+    border-top: solid $primary-background-lighten-2;
+}
+
+/* ── Session pills ── */
+SessionPill {
+    width: auto;
+    height: 1;
+    min-width: 12;
+    max-width: 40;
+    padding: 0 1;
+    margin: 1 0 0 1;
+    color: $text-muted;
+    overflow: hidden;
+}
+
+SessionPill.running {
+    color: $success;
+}
+
+SessionPill.waiting {
+    color: #e5a100;
+}
+
+SessionPill.idle {
+    color: $text-muted;
+}
+
+SessionPill.dead {
+    color: $text-disabled;
+}
+
+SessionPill.selected {
+    text-style: bold reverse;
+}
+
+/* ── Autopilot indicators ── */
+SessionPill.autopilot-on {
+    color: $success;
+}
+
+SessionPill.autopilot-warning {
+    color: #e5a100;
+    text-style: bold;
+}
+
+/* ── Autopilot pulse states (toggled by timer in Python) ── */
+SessionPill.autopilot-pulse-dim {
+    opacity: 0.5;
+}
+
+/* ── Hints bar ── */
+#hints-bar {
+    dock: bottom;
+    height: 1;
+    background: $primary-background;
+    color: $text-muted;
+    text-align: center;
+    padding: 0 1;
+}
+
+/* ── Main area placeholder ── */
+#main-area {
+    height: 1fr;
+}
