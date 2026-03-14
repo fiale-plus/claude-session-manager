@@ -145,6 +145,18 @@ func (m *Manager) UpdateSessionFromScanner(s *model.Session) {
 	m.notifySubscribers()
 }
 
+// SetSlug updates the slug (display name) for a session.
+func (m *Manager) SetSlug(sid, slug string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.sessions[sid]; ok {
+		if s.Slug != slug {
+			s.Slug = slug
+			m.notifySubscribers()
+		}
+	}
+}
+
 // SetGhosttyTab enriches a session with Ghostty tab info.
 func (m *Manager) SetGhosttyTab(sid, tabName string) {
 	m.mu.Lock()

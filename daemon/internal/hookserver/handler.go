@@ -17,6 +17,7 @@ import (
 type hookRequest struct {
 	HookEventName  string         `json:"hook_event_name"`
 	SessionID      string         `json:"session_id"`
+	Slug           string         `json:"slug"`
 	CWD            string         `json:"cwd"`
 	ToolName       string         `json:"tool_name"`
 	ToolInput      map[string]any `json:"tool_input"`
@@ -79,8 +80,11 @@ func (h *Handler) Handle(conn net.Conn) {
 }
 
 func (h *Handler) handleSessionStart(req hookRequest) {
-	log.Printf("hook: SessionStart session=%s cwd=%s", req.SessionID, req.CWD)
+	log.Printf("hook: SessionStart session=%s slug=%s cwd=%s", req.SessionID, req.Slug, req.CWD)
 	h.state.RegisterSession(req.SessionID, req.CWD, req.PermissionMode)
+	if req.Slug != "" {
+		h.state.SetSlug(req.SessionID, req.Slug)
+	}
 }
 
 func (h *Handler) handleSessionEnd(req hookRequest) {
@@ -90,6 +94,10 @@ func (h *Handler) handleSessionEnd(req hookRequest) {
 
 func (h *Handler) handlePreToolUse(req hookRequest) hookResponse {
 	log.Printf("hook: PreToolUse session=%s tool=%s", req.SessionID, req.ToolName)
+	// Update slug if CC sent one (picks up /rename changes).
+	if req.Slug != "" {
+		h.state.SetSlug(req.SessionID, req.Slug)
+	}
 
 	tool := model.PendingTool{
 		ToolName:  req.ToolName,
