@@ -3,26 +3,34 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	// State colors.
-	colorRunning = lipgloss.Color("#22c55e") // green
-	colorWaiting = lipgloss.Color("#eab308") // yellow
-	colorIdle    = lipgloss.Color("#9ca3af") // gray
-	colorDead    = lipgloss.Color("#4b5563") // dark gray
+	// ── State colors ─────────────────────────────────────────────
+	colorRunning     = lipgloss.Color("#22c55e") // vibrant green
+	colorRunningDim  = lipgloss.Color("#166534") // muted green for bg
+	colorWaiting     = lipgloss.Color("#facc15") // bright yellow
+	colorWaitingDim  = lipgloss.Color("#854d0e") // muted amber
+	colorIdle        = lipgloss.Color("#94a3b8") // slate gray
+	colorIdleDim     = lipgloss.Color("#334155") // dark slate
+	colorDead        = lipgloss.Color("#64748b") // cool gray
+	colorDeadDim     = lipgloss.Color("#1e293b") // dark cool gray
 	colorDestructive = lipgloss.Color("#ef4444") // red
-	colorOrange  = lipgloss.Color("#f97316") // orange
+	colorOrange      = lipgloss.Color("#f97316") // orange
 
-	// General UI colors.
-	colorFg       = lipgloss.Color("#e5e7eb")
-	colorDimFg    = lipgloss.Color("#6b7280")
-	colorBorder   = lipgloss.Color("#374151")
-	colorAccent   = lipgloss.Color("#3b82f6") // blue
-	colorBg       = lipgloss.Color("#111827")
-	colorPanelBg  = lipgloss.Color("#1f2937")
+	// ── UI chrome ────────────────────────────────────────────────
+	colorFg        = lipgloss.Color("#f1f5f9") // near-white slate
+	colorDimFg     = lipgloss.Color("#64748b") // muted text
+	colorSubtle    = lipgloss.Color("#475569") // subtle separators
+	colorBorder    = lipgloss.Color("#334155") // panel borders
+	colorAccent    = lipgloss.Color("#6366f1") // indigo accent
+	colorAccentDim = lipgloss.Color("#312e81") // dark indigo
+	colorBg        = lipgloss.Color("#0f172a") // deep navy bg
+	colorPanelBg   = lipgloss.Color("#1e293b") // panel bg
+	colorCardBg    = lipgloss.Color("#1e293b") // card bg
+	colorBadgeBg   = lipgloss.Color("#7c3aed") // purple badge
 
-	// Styles.
-	styleApp = lipgloss.NewStyle().
-			Background(colorBg)
+	// ── Section label color ──────────────────────────────────────
+	colorLabel = lipgloss.Color("#a5b4fc") // light indigo for labels
 
+	// ── Zoom Panel ───────────────────────────────────────────────
 	styleZoomPanel = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).
@@ -37,23 +45,34 @@ var (
 			Foreground(colorDimFg)
 
 	styleActivityLine = lipgloss.NewStyle().
-			Foreground(colorDimFg)
+				Foreground(colorDimFg)
 
 	styleMotivation = lipgloss.NewStyle().
 			Foreground(colorFg).
 			Italic(true)
 
+	// ── Hints bar ────────────────────────────────────────────────
 	styleHintsBar = lipgloss.NewStyle().
 			Foreground(colorDimFg).
 			Padding(0, 1)
 
 	styleHintKey = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(colorFg)
-
-	styleStripBar = lipgloss.NewStyle().
+			Foreground(colorFg).
+			Background(colorAccentDim).
 			Padding(0, 1)
 
+	styleHintSep = lipgloss.NewStyle().
+			Foreground(colorSubtle)
+
+	// ── Strip bar ────────────────────────────────────────────────
+	styleStripBar = lipgloss.NewStyle().
+			Padding(0, 1).
+			BorderTop(true).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(colorBorder)
+
+	// ── Queue panel ──────────────────────────────────────────────
 	styleQueuePanel = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorOrange).
@@ -64,6 +83,7 @@ var (
 			Bold(true).
 			Foreground(colorOrange)
 
+	// ── Safety markers ───────────────────────────────────────────
 	styleSafe = lipgloss.NewStyle().
 			Foreground(colorRunning)
 
@@ -73,11 +93,30 @@ var (
 	styleUnknown = lipgloss.NewStyle().
 			Foreground(colorDimFg)
 
+	// ── Connection status ────────────────────────────────────────
 	styleStatusConnected = lipgloss.NewStyle().
-			Foreground(colorRunning)
+				Foreground(colorRunning)
 
 	styleStatusDisconnected = lipgloss.NewStyle().
-			Foreground(colorDestructive)
+				Foreground(colorDestructive)
+
+	// ── Section labels (Activities:, Pending:, etc.) ─────────────
+	styleSectionLabel = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorLabel)
+
+	// ── Autopilot badge ──────────────────────────────────────────
+	styleAutopilotOn = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#000000")).
+			Background(colorRunning).
+			Padding(0, 1)
+
+	styleAutopilotWarn = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#000000")).
+				Background(colorOrange).
+				Padding(0, 1)
 )
 
 // stateColor returns the lipgloss color for a session state.
@@ -96,18 +135,50 @@ func stateColor(state string) lipgloss.Color {
 	}
 }
 
-// stateIcon returns the icon for a session state.
+// stateColorDim returns a muted background shade for a session state.
+func stateColorDim(state string) lipgloss.Color {
+	switch state {
+	case "running":
+		return colorRunningDim
+	case "waiting":
+		return colorWaitingDim
+	case "idle":
+		return colorIdleDim
+	case "dead":
+		return colorDeadDim
+	default:
+		return colorBorder
+	}
+}
+
+// stateIcon returns a distinctive icon for a session state.
 func stateIcon(state string) string {
 	switch state {
 	case "running":
-		return "\u2699" // gear
+		return "\u25b6" // ▶  play/running
 	case "waiting":
-		return "\u23f3" // hourglass
+		return "\u23f8" // ⏸  pause/waiting
 	case "idle":
-		return "\u2713" // checkmark
+		return "\u2714" // ✔  checkmark
 	case "dead":
-		return "\u25cb" // circle
+		return "\u25cf" // ●  filled circle (stopped)
 	default:
-		return "?"
+		return "\u2022" // •  bullet
+	}
+}
+
+// stateLabel returns a human-friendly label for a state.
+func stateLabel(state string) string {
+	switch state {
+	case "running":
+		return "RUNNING"
+	case "waiting":
+		return "WAITING"
+	case "idle":
+		return "IDLE"
+	case "dead":
+		return "STOPPED"
+	default:
+		return "UNKNOWN"
 	}
 }

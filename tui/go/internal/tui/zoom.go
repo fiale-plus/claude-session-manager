@@ -17,91 +17,120 @@ func renderZoom(s client.Session, width, height int) string {
 
 	innerWidth := width - 6 // account for padding + border
 
-	// Header: project_name (state) > branch
-	stateStr := lipgloss.NewStyle().
-		Foreground(stateColor(s.State)).
-		Render(string(s.State))
+	// ── Header: project + state badge + branch ──────────────────
+	stateStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#000000")).
+		Background(stateColor(s.State)).
+		Bold(true).
+		Padding(0, 1)
 
 	header := styleZoomHeader.Render(s.ProjectName) +
-		" (" + stateStr + ")"
+		" " + stateStyle.Render(stateLabel(s.State))
+
 	if s.GitBranch != "" {
-		header += " " + styleZoomBranch.Render("\u25b8 "+s.GitBranch)
+		branchPill := lipgloss.NewStyle().
+			Foreground(colorAccent).
+			Render("\ue0a0 " + s.GitBranch) // git branch icon
+		header += "  " + branchPill
 	}
 
-	// Autopilot indicator.
+	// ── Autopilot indicator ─────────────────────────────────────
 	autopilotLine := ""
 	if s.Autopilot {
-		apStyle := lipgloss.NewStyle().Foreground(colorRunning).Bold(true)
+		apStyle := styleAutopilotOn
 		if s.HasDestructive {
-			apStyle = apStyle.Foreground(colorOrange)
+			apStyle = styleAutopilotWarn
 		}
-		autopilotLine = apStyle.Render("AUTOPILOT ON")
+		autopilotLine = apStyle.Render("\u2699 AUTOPILOT")
 		if s.HasDestructive {
-			autopilotLine += " " + styleDestructive.Render("[destructive pending]")
+			autopilotLine += "  " + styleDestructive.Render("\u26a0 destructive pending")
 		}
 	}
 
-	// PID + CWD info.
-	info := styleZoomBranch.Render(
-		fmt.Sprintf("PID %d  %s", s.PID, truncateMiddle(s.CWD, innerWidth-12)))
+	// ── PID + CWD ───────────────────────────────────────────────
+	pidStr := lipgloss.NewStyle().Foreground(colorDimFg).Render(
+		fmt.Sprintf("PID %d", s.PID))
+	cwdStr := lipgloss.NewStyle().Foreground(colorSubtle).Render(
+		truncateMiddle(s.CWD, innerWidth-12))
+	info := pidStr + "  " + cwdStr
 
-	// Activities timeline (last 6).
-	activityLines := []string{}
-	start := 0
-	if len(s.Activities) > 6 {
-		start = len(s.Activities) - 6
-	}
-	for _, a := range s.Activities[start:] {
-		ts := a.Timestamp.Format("15:04:05")
-		icon := activityIcon(a.ActivityType)
-		line := styleActivityLine.Render(
-			fmt.Sprintf("  %s %s %s", ts, icon, truncateMiddle(a.Summary, innerWidth-20)))
-		activityLines = append(activityLines, line)
-	}
-
-	activityBlock := ""
-	if len(activityLines) > 0 {
-		activityBlock = lipgloss.NewStyle().
-			Foreground(colorDimFg).Bold(true).Render("Activities:") + "\n" +
-			strings.Join(activityLines, "\n")
-	}
-
-	// Motivation (last assistant text).
-	motivationBlock := ""
-	if s.LastText != "" {
-		text := s.LastText
-		// Truncate to fit panel.
-		maxChars := innerWidth * 3
-		if len(text) > maxChars {
-			text = text[:maxChars] + "..."
-		}
-		motivationBlock = lipgloss.NewStyle().
-			Foreground(colorDimFg).Bold(true).Render("Last text:") + "\n" +
-			styleMotivation.Width(innerWidth).Render("  "+text)
-	}
-
-	// Pending tools inline.
-	pendingBlock := ""
-	if len(s.PendingTools) > 0 {
-		lines := []string{}
-		for _, pt := range s.PendingTools {
-			safetyIcon := safetyMarker(pt.Safety)
-			lines = append(lines,
-				fmt.Sprintf("  %s %s", safetyIcon, pt.ToolName))
-		}
-		pendingBlock = lipgloss.NewStyle().
-			Foreground(colorOrange).Bold(true).Render("Pending approval:") + "\n" +
-			strings.Join(lines, "\n")
-	}
-
-	// Last activity time.
+	// ── Last activity ───────────────────────────────────────────
 	lastActivityStr := ""
 	if s.LastActivity != nil {
 		ago := time.Since(*s.LastActivity).Truncate(time.Second)
-		lastActivityStr = styleZoomBranch.Render(fmt.Sprintf("Last activity: %s ago", ago))
+		lastActivityStr = lipgloss.NewStyle().
+			Foreground(colorDimFg).
+			Render(fmt.Sprintf("\u23f1 %s ago", ago)) // stopwatch icon
 	}
 
-	// Assemble sections.
+	// ── Activities timeline (last 6) ────────────────────────────
+	activityBlock := ""
+	if len(s.Activities) > 0 {
+		start := 0
+		if len(s.Activities) > 6 {
+			start = len(s.Activities) - 6
+		}
+
+		var activityLines []string
+		for _, a := range s.Activities[start:] {
+			ts := lipgloss.NewStyle().
+				Foreground(colorSubtle).
+				Render(a.Timestamp.Format("15:04:05"))
+			icon := activityIcon(a.ActivityType)
+			iconStyled := lipgloss.NewStyle().
+				Foreground(activityColor(a.ActivityType)).
+				Render(icon)
+			summary := lipgloss.NewStyle().
+				Foreground(colorDimFg).
+				Render(truncateMiddle(a.Summary, innerWidth-20))
+			activityLines = append(activityLines,
+				fmt.Sprintf("  %s  %s  %s", ts, iconStyled, summary))
+		}
+
+		activityBlock = styleSectionLabel.Render("\u2500\u2500 Activities") + "\n" +
+			strings.Join(activityLines, "\n")
+	}
+
+	// ── Pending approval ────────────────────────────────────────
+	pendingBlock := ""
+	if len(s.PendingTools) > 0 {
+		var lines []string
+		for _, pt := range s.PendingTools {
+			marker := safetyMarker(pt.Safety)
+			toolStyle := lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+			lines = append(lines,
+				fmt.Sprintf("  %s %s", marker, toolStyle.Render(pt.ToolName)))
+		}
+		countBadge := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#ffffff")).
+			Background(colorOrange).
+			Bold(true).
+			Padding(0, 1).
+			Render(fmt.Sprintf("%d", len(s.PendingTools)))
+		pendingBlock = styleSectionLabel.
+			Foreground(colorOrange).
+			Render("\u2500\u2500 Pending Approval") +
+			" " + countBadge + "\n" +
+			strings.Join(lines, "\n")
+	}
+
+	// ── Motivation (last assistant text) ────────────────────────
+	motivationBlock := ""
+	if s.LastText != "" {
+		text := s.LastText
+		maxChars := innerWidth * 3
+		if len(text) > maxChars {
+			text = text[:maxChars] + "\u2026"
+		}
+		motivationBlock = styleSectionLabel.Render("\u2500\u2500 Last Output") + "\n" +
+			styleMotivation.Width(innerWidth).Render("  \u201c"+text+"\u201d")
+	}
+
+	// ── Separator line ──────────────────────────────────────────
+	sep := lipgloss.NewStyle().Foreground(colorBorder).
+		Render(strings.Repeat("\u2500", min(innerWidth, 60)))
+
+	// ── Assemble sections ───────────────────────────────────────
 	sections := []string{header}
 	if autopilotLine != "" {
 		sections = append(sections, autopilotLine)
@@ -111,19 +140,29 @@ func renderZoom(s client.Session, width, height int) string {
 		sections = append(sections, lastActivityStr)
 	}
 	if activityBlock != "" {
-		sections = append(sections, "", activityBlock)
+		sections = append(sections, sep, activityBlock)
 	}
 	if pendingBlock != "" {
-		sections = append(sections, "", pendingBlock)
+		sections = append(sections, sep, pendingBlock)
 	}
 	if motivationBlock != "" {
-		sections = append(sections, "", motivationBlock)
+		sections = append(sections, sep, motivationBlock)
 	}
 
 	body := strings.Join(sections, "\n")
 
-	return styleZoomPanel.
-		Width(width - 2). // account for border
+	// Dynamic border color based on state.
+	borderColor := stateColor(s.State)
+	if len(s.PendingTools) > 0 {
+		borderColor = colorOrange
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(1, 2).
+		Background(colorPanelBg).
+		Width(width - 2).
 		Height(height).
 		Render(body)
 }
@@ -142,6 +181,24 @@ func activityIcon(actType string) string {
 		return "\u26a0" // warning
 	default:
 		return "\u2022" // bullet
+	}
+}
+
+// activityColor returns a color for activity type icons.
+func activityColor(actType string) lipgloss.Color {
+	switch actType {
+	case "tool_use":
+		return colorAccent
+	case "text":
+		return colorRunning
+	case "thinking":
+		return colorWaiting
+	case "user_message":
+		return lipgloss.Color("#38bdf8") // sky blue
+	case "system":
+		return colorOrange
+	default:
+		return colorDimFg
 	}
 }
 

@@ -10,7 +10,11 @@ import (
 // renderStrip renders the horizontal session pill strip at the bottom.
 func renderStrip(sessions []client.Session, selectedIdx int, width int) string {
 	if len(sessions) == 0 {
-		return styleStripBar.Width(width).Render("  No sessions")
+		emptyStyle := lipgloss.NewStyle().
+			Foreground(colorDimFg).
+			Italic(true)
+		return styleStripBar.Width(width).Render(
+			emptyStyle.Render("  No active sessions"))
 	}
 
 	var pills []string
@@ -48,7 +52,7 @@ func truncateMiddle(s string, maxLen int) string {
 		return string(runes[:maxLen])
 	}
 	half := (maxLen - 3) / 2
-	return string(runes[:half]) + "..." + string(runes[len(runes)-half:])
+	return string(runes[:half]) + "\u2026" + string(runes[len(runes)-half:])
 }
 
 // countPending returns the total pending tools across all sessions.

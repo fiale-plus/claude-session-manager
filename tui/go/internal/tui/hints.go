@@ -1,6 +1,6 @@
 package tui
 
-// renderHints renders the keyboard hints bar.
+// renderHints renders the keyboard hints bar with styled key badges.
 func renderHints(queueVisible bool, hasPending bool, width int) string {
 	keys := []struct {
 		key  string
@@ -29,10 +29,12 @@ func renderHints(queueVisible bool, hasPending bool, width int) string {
 
 	keys = append(keys, struct{ key, desc string }{"q", "quit"})
 
+	sep := styleHintSep.Render(" \u2502 ")
+
 	line := ""
 	for i, k := range keys {
 		if i > 0 {
-			line += "  "
+			line += sep
 		}
 		line += styleHintKey.Render(k.key) + " " + k.desc
 	}
