@@ -24,6 +24,9 @@ type disconnectedMsg struct{}
 // reconnectTickMsg triggers a reconnection attempt.
 type reconnectTickMsg struct{}
 
+// glowTickMsg advances the glow sweep animation.
+type glowTickMsg struct{}
+
 // actionResultMsg carries the result of an approve/reject/autopilot action.
 type actionResultMsg struct {
 	action string // "approve", "reject", "autopilot"
@@ -38,12 +41,16 @@ type Model struct {
 	client       *client.Client
 	sessions     []client.Session
 	selectedIdx  int
+	selectedSID  string // stable selection tracking by session ID
 	queueVisible bool
+	helpVisible  bool
 	connected    bool
 	width        int
 	height       int
 	flash        string // temporary status message
 	flashStyle   lipgloss.Style
+	glowPos      int
+	glowDir      int // 1 or -1 for ping-pong
 }
 
 // NewModel creates a new TUI model.
@@ -53,9 +60,16 @@ func NewModel(c *client.Client) Model {
 	}
 }
 
-// Init starts the subscription.
+// glowTick returns a command that sends a glowTickMsg every 150ms.
+func glowTick() tea.Cmd {
+	return tea.Tick(150*time.Millisecond, func(_ time.Time) tea.Msg {
+		return glowTickMsg{}
+	})
+}
+
+// Init starts the subscription and the glow animation.
 func (m Model) Init() tea.Cmd {
-	return m.subscribeCmd()
+	return tea.Batch(m.subscribeCmd(), glowTick())
 }
 
 // subscribeCmd attempts to connect and subscribe to the daemon.
@@ -135,9 +149,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reconnectTickMsg:
 		return m, m.subscribeCmd()
 
+	case glowTickMsg:
+		// Advance glow position with ping-pong across max label length.
+		maxLen := 20
+		if m.glowDir == 0 {
+			m.glowDir = 1
+		}
+		m.glowPos += m.glowDir
+		if m.glowPos >= maxLen {
+			m.glowPos = maxLen - 1
+			m.glowDir = -1
+		}
+		if m.glowPos <= 0 {
+			m.glowPos = 0
+			m.glowDir = 1
+		}
+		return m, glowTick()
+
 	case sessionsMsg:
 		m.sessions = msg
-		if m.selectedIdx >= len(m.sessions) {
+		// Restore selection by session ID to prevent jumping.
+		if m.selectedSID != "" {
+			found := false
+			for i, s := range m.sessions {
+				if s.SessionID == m.selectedSID {
+					m.selectedIdx = i
+					found = true
+					break
+				}
+			}
+			if !found {
+				if m.selectedIdx >= len(m.sessions) {
+					m.selectedIdx = max(0, len(m.sessions)-1)
+				}
+				if m.selectedIdx >= 0 && m.selectedIdx < len(m.sessions) {
+					m.selectedSID = m.sessions[m.selectedIdx].SessionID
+				}
+			}
+		} else if m.selectedIdx >= len(m.sessions) {
 			m.selectedIdx = max(0, len(m.sessions)-1)
 		}
 		return m, waitForUpdate
@@ -163,7 +212,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
-		if m.queueVisible {
+		if m.queueVisible || m.helpVisible {
 			return m, nil
 		}
 		m.client.Close()
@@ -173,16 +222,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.client.Close()
 		return m, tea.Quit
 
-	case "left", "h":
+	case "left":
 		if m.selectedIdx > 0 {
 			m.selectedIdx--
+			if m.selectedIdx < len(m.sessions) {
+				m.selectedSID = m.sessions[m.selectedIdx].SessionID
+			}
 		}
 		return m, nil
 
 	case "right", "l":
 		if m.selectedIdx < len(m.sessions)-1 {
 			m.selectedIdx++
+			if m.selectedIdx < len(m.sessions) {
+				m.selectedSID = m.sessions[m.selectedIdx].SessionID
+			}
 		}
+		return m, nil
+
+	case "h":
+		m.helpVisible = !m.helpVisible
 		return m, nil
 
 	case "a":
@@ -194,7 +253,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case "enter", "y":
+	case "enter", "return":
+		if sel := m.selected(); sel != nil {
+			sid := sel.SessionID
+			return m, func() tea.Msg {
+				err := m.client.Focus(sid)
+				return actionResultMsg{action: "focus", err: err}
+			}
+		}
+
+	case "y":
 		if sel := m.selected(); sel != nil && len(sel.PendingTools) > 0 {
 			sid := sel.SessionID
 			return m, func() tea.Msg {
@@ -220,7 +288,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.approveAllSafe()
 
 	case "esc":
-		if m.queueVisible {
+		if m.helpVisible {
+			m.helpVisible = false
+		} else if m.queueVisible {
 			m.queueVisible = false
 		}
 		return m, nil
@@ -265,8 +335,13 @@ func (m Model) View() string {
 	w := m.width
 	hasPending := countPending(m.sessions) > 0
 
+	// If help is visible, render help overlay instead.
+	if m.helpVisible {
+		return renderHelp(w, m.height)
+	}
+
 	// Render bottom sections first to calculate remaining height.
-	strip := renderStrip(m.sessions, m.selectedIdx, w)
+	strip := renderStrip(m.sessions, m.selectedIdx, w, m.glowPos)
 	stripHeight := lipgloss.Height(strip)
 
 	hints := renderHints(m.queueVisible, hasPending, w)

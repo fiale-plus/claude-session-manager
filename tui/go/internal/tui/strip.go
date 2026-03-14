@@ -8,7 +8,7 @@ import (
 )
 
 // renderStrip renders the horizontal session pill strip at the bottom.
-func renderStrip(sessions []client.Session, selectedIdx int, width int) string {
+func renderStrip(sessions []client.Session, selectedIdx int, width int, glowPos int) string {
 	if len(sessions) == 0 {
 		emptyStyle := lipgloss.NewStyle().
 			Foreground(colorDimFg).
@@ -19,7 +19,7 @@ func renderStrip(sessions []client.Session, selectedIdx int, width int) string {
 
 	var pills []string
 	for i, s := range sessions {
-		pills = append(pills, renderPill(s, i == selectedIdx))
+		pills = append(pills, renderPill(s, i == selectedIdx, glowPos))
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Center, interleave(pills, " ")...)

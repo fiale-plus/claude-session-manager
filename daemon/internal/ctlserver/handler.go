@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 
+	"github.com/pchaganti/claude-session-manager/daemon/internal/ghostty"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/model"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/state"
 )
@@ -55,6 +56,8 @@ func (h *Handler) Handle(conn net.Conn) {
 			return // subscribe takes over the connection
 		case "toggle_autopilot":
 			h.handleToggleAutopilot(conn, req.SessionID)
+		case "focus":
+			h.handleFocus(conn, req.SessionID)
 		case "approve":
 			h.handleApprove(conn, req.SessionID)
 		case "reject":
@@ -97,10 +100,43 @@ func (h *Handler) handleToggleAutopilot(conn net.Conn, sid string) {
 	writeJSON(conn, ctlResponse{OK: &bOK, Autopilot: &newState})
 }
 
+func (h *Handler) handleFocus(conn net.Conn, sid string) {
+	sessions := h.state.GetSessions()
+	ok := false
+	for _, s := range sessions {
+		if s.SessionID == sid && s.GhosttyTab != "" {
+			ok = ghostty.SwitchToTab(s.GhosttyTab)
+			break
+		}
+	}
+	writeJSON(conn, ctlResponse{OK: &ok})
+}
+
 func (h *Handler) handleApprove(conn net.Conn, sid string) {
 	ok := h.state.ResolvePending(sid, model.DecisionAllow)
 	if !ok {
-		log.Printf("ctl: approve failed for session %s (no pending or cooldown)", sid)
+		// Fallback: send keystroke via Ghostty.
+		sessions := h.state.GetSessions()
+		found := false
+		for _, s := range sessions {
+			if s.SessionID == sid {
+				found = true
+				log.Printf("ctl: session %s ghostty_tab=%q", sid, s.GhosttyTab)
+				if s.GhosttyTab != "" {
+					ok = ghostty.SendApproval(s.GhosttyTab)
+					log.Printf("ctl: SendApproval(%q) = %v", s.GhosttyTab, ok)
+				}
+				break
+			}
+		}
+		if !found {
+			log.Printf("ctl: session %s not found in %d sessions", sid, len(sessions))
+		}
+		if !ok {
+			log.Printf("ctl: approve failed for session %s", sid)
+		} else {
+			log.Printf("ctl: approved session %s via keystroke", sid)
+		}
 	} else {
 		log.Printf("ctl: approved session %s", sid)
 	}
@@ -110,7 +146,19 @@ func (h *Handler) handleApprove(conn net.Conn, sid string) {
 func (h *Handler) handleReject(conn net.Conn, sid string) {
 	ok := h.state.ResolvePending(sid, model.DecisionDeny)
 	if !ok {
-		log.Printf("ctl: reject failed for session %s (no pending or cooldown)", sid)
+		// Fallback: send keystroke via Ghostty.
+		sessions := h.state.GetSessions()
+		for _, s := range sessions {
+			if s.SessionID == sid && s.GhosttyTab != "" {
+				ok = ghostty.SendRejection(s.GhosttyTab)
+				break
+			}
+		}
+		if !ok {
+			log.Printf("ctl: reject failed for session %s (no pending or cooldown)", sid)
+		} else {
+			log.Printf("ctl: rejected session %s via keystroke", sid)
+		}
 	} else {
 		log.Printf("ctl: rejected session %s", sid)
 	}

@@ -2,22 +2,52 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/pchaganti/claude-session-manager/tui-go/internal/client"
 )
 
+// looksLikeCommand returns true if the string looks like a shell command
+// rather than a meaningful session name.
+func looksLikeCommand(s string) bool {
+	for _, marker := range []string{"&&", "|", ";", "cd ", "./", "  "} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	if strings.HasPrefix(s, "/") {
+		return true
+	}
+	return false
+}
+
+// pillName picks the best display name for a session:
+// ghostty_tab (if not command-like) > slug > project_name > session_id[:8]
+func pillName(s client.Session) string {
+	if s.GhosttyTab != "" && !looksLikeCommand(s.GhosttyTab) {
+		return s.GhosttyTab
+	}
+	if s.Slug != "" {
+		return s.Slug
+	}
+	if s.ProjectName != "" {
+		return s.ProjectName
+	}
+	if len(s.SessionID) >= 8 {
+		return s.SessionID[:8]
+	}
+	return s.SessionID
+}
+
 // renderPill renders a single session pill with state-colored background,
 // icon, name, and optional pending-tool count badge.
-func renderPill(s client.Session, selected bool) string {
+func renderPill(s client.Session, selected bool, glowPos int) string {
 	sc := stateColor(s.State)
 	dimBg := stateColorDim(s.State)
 	icon := stateIcon(s.State)
 
-	name := s.ProjectName
-	if name == "" {
-		name = s.SessionID[:min(8, len(s.SessionID))]
-	}
+	name := pillName(s)
 
 	label := icon + " " + name
 
@@ -37,24 +67,20 @@ func renderPill(s client.Session, selected bool) string {
 		Background(dimBg)
 
 	if selected {
+		accentColor := colorAccent
+		if s.Autopilot && s.HasDestructive {
+			accentColor = colorOrange
+		} else if s.Autopilot {
+			accentColor = colorRunning
+		}
 		style = style.
 			Bold(true).
 			Foreground(lipgloss.Color("#ffffff")).
 			Background(sc).
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorAccent)
+			BorderForeground(accentColor)
 	}
-
-	// Autopilot border accent (non-selected).
-	if s.Autopilot && !selected {
-		borderColor := colorRunning
-		if s.HasDestructive {
-			borderColor = colorOrange
-		}
-		style = style.
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(borderColor)
-	}
+	// Unselected pills: no border at all.
 
 	return style.Render(label)
 }

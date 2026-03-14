@@ -7,12 +7,21 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/pchaganti/claude-session-manager/daemon/internal/classifier"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/model"
 )
+
+// stateOrder defines sort priority: lower number = higher priority.
+var stateOrder = map[model.SessionState]int{
+	model.StateRunning: 0,
+	model.StateWaiting: 1,
+	model.StateIdle:    2,
+	model.StateDead:    3,
+}
 
 // Manager is the central state store for the daemon.
 type Manager struct {
@@ -249,15 +258,30 @@ func (m *Manager) ToggleAutopilot(sid string) (bool, bool) {
 	return s.Autopilot, true
 }
 
-// GetSessions returns a snapshot of all sessions sorted by state then activity.
+// GetSessions returns a snapshot of all sessions sorted by state then session ID.
+// Dead sessions with PID==0 are filtered out.
 func (m *Manager) GetSessions() []model.Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	result := make([]model.Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
+		// Filter out dead sessions with no PID.
+		if s.State == model.StateDead && s.PID == 0 {
+			continue
+		}
 		result = append(result, *s)
 	}
+
+	sort.Slice(result, func(i, j int) bool {
+		oi := stateOrder[result[i].State]
+		oj := stateOrder[result[j].State]
+		if oi != oj {
+			return oi < oj
+		}
+		return result[i].SessionID < result[j].SessionID
+	})
+
 	return result
 }
 

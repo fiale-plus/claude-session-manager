@@ -167,6 +167,11 @@ func (c *Client) Reject(sessionID string) error {
 	return c.sendCommand(request{Action: "reject", SessionID: sessionID})
 }
 
+// Focus focuses the Ghostty tab for the given session.
+func (c *Client) Focus(sessionID string) error {
+	return c.sendCommand(request{Action: "focus", SessionID: sessionID})
+}
+
 // Close tears down the subscribe connection.
 func (c *Client) Close() {
 	c.mu.Lock()

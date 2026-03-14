@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
 import type { Session } from "../client/client.js";
 
@@ -16,6 +16,23 @@ const STATE_COLOR: Record<Session["state"], string> = {
   dead: "blackBright",
 };
 
+function looksLikeCommand(s: string): boolean {
+  for (const marker of ["&&", "|", ";", "cd ", "./", "  "]) {
+    if (s.includes(marker)) return true;
+  }
+  if (s.startsWith("/")) return true;
+  return false;
+}
+
+function pillName(session: Session): string {
+  if (session.ghostty_tab && !looksLikeCommand(session.ghostty_tab)) {
+    return session.ghostty_tab;
+  }
+  if (session.slug) return session.slug;
+  if (session.project_name) return session.project_name;
+  return session.session_id.slice(0, 8);
+}
+
 interface PillProps {
   session: Session;
   selected: boolean;
@@ -24,9 +41,36 @@ interface PillProps {
 export function Pill({ session, selected }: PillProps) {
   const icon = STATE_ICON[session.state];
   const color = STATE_COLOR[session.state];
+  const name = pillName(session);
+
+  // Glow sweep animation for running sessions.
+  const [glowPos, setGlowPos] = useState(0);
+  const [glowDir, setGlowDir] = useState(1);
+
+  useEffect(() => {
+    if (session.state !== "running") return;
+    const timer = setInterval(() => {
+      setGlowPos((pos) => {
+        const maxLen = name.length;
+        let newPos = pos + glowDir;
+        if (newPos >= maxLen) {
+          newPos = maxLen - 1;
+          setGlowDir(-1);
+        }
+        if (newPos <= 0) {
+          newPos = 0;
+          setGlowDir(1);
+        }
+        return newPos;
+      });
+    }, 150);
+    return () => clearInterval(timer);
+  }, [session.state, name.length, glowDir]);
 
   let bgColor: string | undefined;
-  if (session.autopilot && session.has_destructive) {
+  if (selected) {
+    bgColor = color;
+  } else if (session.autopilot && session.has_destructive) {
     bgColor = "redBright";
   } else if (session.autopilot) {
     bgColor = "greenBright";
@@ -41,11 +85,11 @@ export function Pill({ session, selected }: PillProps) {
       marginRight={1}
     >
       <Text
-        color={color}
+        color={selected ? "white" : color}
         bold={selected}
         backgroundColor={bgColor}
       >
-        {icon} {session.project_name}
+        {icon} {name}
       </Text>
     </Box>
   );

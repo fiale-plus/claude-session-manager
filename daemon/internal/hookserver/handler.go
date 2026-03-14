@@ -2,6 +2,7 @@ package hookserver
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"log"
 	"net"
@@ -47,13 +48,16 @@ func (h *Handler) Handle(conn net.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	if !scanner.Scan() {
 		return
 	}
 
+	raw := bytes.TrimSpace(scanner.Bytes())
+
 	var req hookRequest
-	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-		log.Printf("hook: invalid JSON: %v", err)
+	if err := json.Unmarshal(raw, &req); err != nil {
+		log.Printf("hook: invalid JSON: %v (raw: %.200s)", err, string(raw))
 		writeJSON(conn, hookResponse{})
 		return
 	}

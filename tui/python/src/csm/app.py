@@ -28,13 +28,14 @@ log = logging.getLogger(__name__)
 HINTS = [
     "Arrow keys: navigate sessions",
     "'q' to quit",
-    "Enter: switch to Ghostty tab",
+    "Enter: focus (switch to) session's Ghostty tab",
     "Escape: collapse zoom panel",
     "Press 'a' to toggle autopilot for the selected session",
     "Press 'Q' for the approval queue overlay",
     "Press 'y' to approve the pending tool call",
     "Press 'n' to reject the pending tool call",
     "Press 'A' to approve all safe tool calls at once",
+    "Press 'h' for help",
     "Autopilot auto-approves safe tools, pauses on destructive ones",
     "Destructive commands (git push, rm, etc.) always need manual approval",
 ]
@@ -52,9 +53,10 @@ class SessionManagerApp(App):
         Binding("left", "select_prev", "Prev session", show=False, priority=True),
         Binding("right", "select_next", "Next session", show=False, priority=True),
         Binding("q", "quit", "Quit"),
-        Binding("enter", "switch_tab_or_approve", "Switch tab / Approve", show=False),
+        Binding("enter", "focus_session", "Focus session", show=False),
         Binding("escape", "collapse", "Collapse", show=False),
         Binding("a", "toggle_autopilot", "Autopilot", show=False),
+        Binding("h", "toggle_help", "Help", show=False),
         Binding("Q", "toggle_queue", "Queue", show=False),
         Binding("y", "approve", "Approve", show=False),
         Binding("n", "reject", "Reject", show=False),
@@ -213,20 +215,54 @@ class SessionManagerApp(App):
         if self.queue_visible:
             self.query_one("#approval-queue", ApprovalQueue).move_down()
 
-    def action_switch_tab_or_approve(self) -> None:
-        """Enter: approve selected queue item, or hint about tab switching."""
+    def action_focus_session(self) -> None:
+        """Enter: focus (switch to) the selected session's Ghostty tab."""
         if self.queue_visible:
             self._approve_queue_selected()
             return
-        # Tab switching is now handled by the daemon; the TUI just shows info.
         strip = self.query_one(SessionStrip)
         session = strip.selected_session
         if session is None:
+            self._hint("No session selected")
             return
-        if session.ghostty_tab:
-            self._hint(f"Tab: {session.ghostty_tab}")
-        else:
-            self._hint("No Ghostty tab for this session")
+
+        async def _focus():
+            try:
+                ok = await self._client.focus(session.session_id)
+                if ok:
+                    self._hint(f"Focused: {session.project_name or session.session_id}")
+                else:
+                    self._hint("No Ghostty tab for this session")
+            except Exception as exc:
+                log.debug("focus failed: %s", exc)
+                self._hint("Failed to focus session")
+
+        asyncio.create_task(_focus())
+
+    def action_toggle_help(self) -> None:
+        """Toggle help overlay showing keybindings."""
+        help_lines = [
+            "CSM Help",
+            "\u2500" * 40,
+            "",
+            "  \u2190 / \u2192     Navigate between sessions",
+            "  Enter        Focus (switch to) session's Ghostty tab",
+            "  a            Toggle autopilot",
+            "  y            Approve pending tool call",
+            "  n            Reject pending tool call",
+            "  Q            Toggle approval queue",
+            "  A            Approve all safe tool calls",
+            "  h            Toggle this help",
+            "  Esc          Close help / close queue",
+            "  q            Quit",
+            "",
+            "\u2500" * 40,
+            "Autopilot auto-approves safe tools.",
+            "Destructive commands always need manual approval.",
+            "",
+            "\u25b6 running  \u23f8 waiting  \u2714 idle  \u25cf stopped",
+        ]
+        self._hint("\n".join(help_lines))
 
     def action_collapse(self) -> None:
         """Escape: close queue if visible, otherwise collapse zoom."""

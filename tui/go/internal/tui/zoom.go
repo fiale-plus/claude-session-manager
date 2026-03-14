@@ -98,8 +98,13 @@ func renderZoom(s client.Session, width, height int) string {
 		for _, pt := range s.PendingTools {
 			marker := safetyMarker(pt.Safety)
 			toolStyle := lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+			detail := toolDetail(pt, innerWidth-20)
+			toolLabel := pt.ToolName
+			if detail != "" {
+				toolLabel += ": " + detail
+			}
 			lines = append(lines,
-				fmt.Sprintf("  %s %s", marker, toolStyle.Render(pt.ToolName)))
+				fmt.Sprintf("  %s %s", marker, toolStyle.Render(toolLabel)))
 		}
 		countBadge := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#ffffff")).
@@ -200,6 +205,24 @@ func activityColor(actType string) lipgloss.Color {
 	default:
 		return colorDimFg
 	}
+}
+
+// toolDetail extracts a human-readable summary from a pending tool's input.
+func toolDetail(pt client.PendingTool, maxLen int) string {
+	if pt.ToolInput == nil {
+		return ""
+	}
+	// Try well-known keys in order of usefulness.
+	for _, key := range []string{"command", "file_path", "pattern", "query", "description", "prompt"} {
+		if v, ok := pt.ToolInput[key]; ok {
+			s := fmt.Sprintf("%v", v)
+			if len(s) > maxLen && maxLen > 5 {
+				s = s[:maxLen-3] + "..."
+			}
+			return s
+		}
+	}
+	return ""
 }
 
 func safetyMarker(safety string) string {

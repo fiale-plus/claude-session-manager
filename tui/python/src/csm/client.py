@@ -96,6 +96,15 @@ class DaemonClient:
         resp = await self._recv()
         return resp.get("ok", False)
 
+    async def focus(self, session_id: str) -> bool:
+        """Focus (switch to) the Ghostty tab for a session."""
+        await self._send({
+            "action": "focus",
+            "session_id": session_id,
+        })
+        resp = await self._recv()
+        return resp.get("ok", False)
+
     async def disconnect(self) -> None:
         """Close the socket connection."""
         if self._writer is not None:

@@ -3,6 +3,7 @@
 package ghostty
 
 import (
+	"fmt"
 	"log"
 	"os/exec"
 	"strconv"
@@ -88,15 +89,89 @@ func GetTabs() []Tab {
 }
 
 // CorrelateTab finds the Ghostty tab for a given working directory.
+// Also matches if session CWD is a subdirectory of a tab's working directory.
 func CorrelateTab(cwd string) string {
 	cwd = strings.TrimRight(cwd, "/")
+	// First pass: exact match.
 	for _, tab := range GetTabs() {
 		tabDir := strings.TrimRight(tab.WorkingDirectory, "/")
 		if tabDir == cwd {
 			return tab.Name
 		}
 	}
+	// Second pass: subdirectory match (session cwd is child of tab dir).
+	for _, tab := range GetTabs() {
+		tabDir := strings.TrimRight(tab.WorkingDirectory, "/")
+		if strings.HasPrefix(cwd, tabDir+"/") {
+			return tab.Name
+		}
+	}
 	return ""
+}
+
+// SwitchToTab switches to a Ghostty tab by name. Returns true on success.
+func SwitchToTab(tabName string) bool {
+	tabs := GetTabs()
+	for _, tab := range tabs {
+		if tab.Name == tabName {
+			script := fmt.Sprintf(`tell application "Ghostty"
+    activate
+    set w to front window
+    set tabList to every tab of w
+    repeat with t in tabList
+        if name of t is "%s" then
+            set selected of t to true
+            return true
+        end if
+    end repeat
+    return false
+end tell`, strings.ReplaceAll(tabName, `"`, `\"`))
+			_, err := runOsascript(script)
+			return err == nil
+		}
+	}
+	return false
+}
+
+// SendApproval sends a "y" keystroke to the named Ghostty tab, then switches back.
+func SendApproval(tabName string) bool {
+	return sendKeystroke(tabName, "y")
+}
+
+// SendRejection sends an "n" keystroke to the named Ghostty tab, then switches back.
+func SendRejection(tabName string) bool {
+	return sendKeystroke(tabName, "n")
+}
+
+func sendKeystroke(tabName, key string) bool {
+	// Find which tab is currently selected so we can switch back.
+	tabs := GetTabs()
+	var originalTab string
+	for _, t := range tabs {
+		if t.Selected {
+			originalTab = t.Name
+			break
+		}
+	}
+
+	if !SwitchToTab(tabName) {
+		return false
+	}
+
+	script := fmt.Sprintf(`tell application "System Events"
+    delay 0.1
+    keystroke "%s"
+end tell`, key)
+	_, err := runOsascript(script)
+	if err != nil {
+		return false
+	}
+
+	// Switch back to the original tab.
+	if originalTab != "" && originalTab != tabName {
+		SwitchToTab(originalTab)
+	}
+	return true
 }
 
 func runOsascript(script string) (string, error) {

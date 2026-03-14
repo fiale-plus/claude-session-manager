@@ -18,6 +18,7 @@ export interface Activity {
 
 export interface Session {
   session_id: string;
+  slug: string;
   cwd: string;
   project_name: string;
   state: "running" | "waiting" | "idle" | "dead";
@@ -98,6 +99,10 @@ export class CSMClient extends EventEmitter {
 
   reject(sessionId: string): void {
     this.send({ action: "reject", session_id: sessionId });
+  }
+
+  focus(sessionId: string): void {
+    this.send({ action: "focus", session_id: sessionId });
   }
 
   disconnect(): void {

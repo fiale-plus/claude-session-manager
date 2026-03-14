@@ -58,6 +58,11 @@ func runDaemon() {
 	defer hookSrv.Close()
 	go hookSrv.Serve()
 
+	// Start HTTP hook server.
+	httpHookSrv := hookserver.NewHTTP(hookserver.DefaultHTTPPort, st)
+	defer httpHookSrv.Close()
+	go httpHookSrv.Serve()
+
 	// Start control server.
 	ctlSrv, err := ctlserver.New(ctlserver.DefaultSocket, st)
 	if err != nil {
