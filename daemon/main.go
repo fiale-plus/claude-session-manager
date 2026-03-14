@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -185,6 +188,9 @@ func install() {
 		fmt.Println("loaded launchd service")
 	}
 
+	// 3. Install Ghostty integration.
+	installGhostty(home)
+
 	fmt.Println("installation complete")
 }
 
@@ -209,7 +215,10 @@ func uninstall() {
 		fmt.Println("removed plugin")
 	}
 
-	// 3. Clean up sockets.
+	// 3. Remove Ghostty integration.
+	uninstallGhostty(home)
+
+	// 4. Clean up sockets.
 	_ = os.Remove(hookserver.DefaultSocket)
 	_ = os.Remove(ctlserver.DefaultSocket)
 
@@ -255,6 +264,171 @@ func daemonBinaryPath() string {
 		return exe
 	}
 	return abs
+}
+
+// --- Ghostty integration ---
+
+const ghosttyConfigMarker = "# --- CSM (Claude Session Manager) ---"
+
+func ghosttyConfigDir(home string) string {
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(home, ".config", "ghostty")
+	}
+	// Linux: XDG_CONFIG_HOME or ~/.config
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "ghostty")
+	}
+	return filepath.Join(home, ".config", "ghostty")
+}
+
+func installGhostty(home string) {
+	configDir := ghosttyConfigDir(home)
+	configPath := filepath.Join(configDir, "config")
+
+	// Check if Ghostty is installed by looking for its config dir or binary.
+	if _, err := os.Stat(configDir); os.IsNotExist(err) {
+		// Check if ghostty binary exists.
+		if _, err := exec.LookPath("ghostty"); err != nil {
+			fmt.Println("skipping Ghostty integration (Ghostty not detected)")
+			return
+		}
+		// Ghostty binary exists but no config dir — create it.
+		_ = os.MkdirAll(configDir, 0o755)
+	}
+
+	// Install CSM shader.
+	shaderDir := filepath.Join(configDir, "shaders")
+	_ = os.MkdirAll(shaderDir, 0o755)
+
+	shaderSrc := findShaderSource()
+	if shaderSrc != "" {
+		shaderDst := filepath.Join(shaderDir, "csm-status.glsl")
+		data, err := os.ReadFile(shaderSrc)
+		if err == nil {
+			if err := os.WriteFile(shaderDst, data, 0o644); err == nil {
+				fmt.Printf("installed shader to %s\n", shaderDst)
+			}
+		}
+	}
+
+	// Append keybinds to Ghostty config (idempotent).
+	if alreadyHasCSMConfig(configPath) {
+		fmt.Println("Ghostty config already has CSM keybinds")
+		return
+	}
+
+	snippet := fmt.Sprintf(`
+%s
+# Keybinds for CSM TUI (approve/reject/queue)
+# These send escape sequences that csm-tui intercepts.
+keybind = ctrl+shift+y=text:\x01csm:approve\n
+keybind = ctrl+shift+n=text:\x01csm:reject\n
+keybind = ctrl+shift+q=text:\x01csm:queue\n
+%s
+`, ghosttyConfigMarker, ghosttyConfigMarker+" END")
+
+	f, err := os.OpenFile(configPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("warning: cannot write Ghostty config: %v", err)
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(snippet); err != nil {
+		log.Printf("warning: cannot append to Ghostty config: %v", err)
+		return
+	}
+
+	fmt.Printf("added CSM keybinds to %s\n", configPath)
+}
+
+func uninstallGhostty(home string) {
+	configDir := ghosttyConfigDir(home)
+	configPath := filepath.Join(configDir, "config")
+
+	// Remove shader.
+	shaderPath := filepath.Join(configDir, "shaders", "csm-status.glsl")
+	if _, err := os.Stat(shaderPath); err == nil {
+		_ = os.Remove(shaderPath)
+		fmt.Println("removed Ghostty shader")
+	}
+
+	// Remove CSM config block from Ghostty config.
+	if !alreadyHasCSMConfig(configPath) {
+		return
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return
+	}
+
+	var lines []string
+	inCSMBlock := false
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == ghosttyConfigMarker {
+			inCSMBlock = true
+			continue
+		}
+		if strings.TrimSpace(line) == ghosttyConfigMarker+" END" {
+			inCSMBlock = false
+			continue
+		}
+		if !inCSMBlock {
+			lines = append(lines, line)
+		}
+	}
+
+	cleaned := strings.Join(lines, "\n")
+	// Remove trailing blank lines left by the block removal.
+	cleaned = strings.TrimRight(cleaned, "\n") + "\n"
+
+	if err := os.WriteFile(configPath, []byte(cleaned), 0o644); err != nil {
+		log.Printf("warning: cannot clean Ghostty config: %v", err)
+		return
+	}
+	fmt.Println("removed CSM keybinds from Ghostty config")
+}
+
+func alreadyHasCSMConfig(configPath string) bool {
+	f, err := os.Open(configPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) == ghosttyConfigMarker {
+			return true
+		}
+	}
+	return false
+}
+
+func findShaderSource() string {
+	exe, _ := os.Executable()
+	if exe != "" {
+		dir := filepath.Dir(exe)
+		for _, candidate := range []string{
+			filepath.Join(dir, "..", "ghostty", "csm-status.glsl"),
+			filepath.Join(dir, "ghostty", "csm-status.glsl"),
+		} {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	cwd, _ := os.Getwd()
+	for _, candidate := range []string{
+		filepath.Join(cwd, "ghostty", "csm-status.glsl"),
+		filepath.Join(cwd, "..", "ghostty", "csm-status.glsl"),
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func copyDir(src, dst string) error {
