@@ -62,6 +62,8 @@ func (h *Handler) Handle(conn net.Conn) {
 			h.handleApprove(conn, req.SessionID)
 		case "reject":
 			h.handleReject(conn, req.SessionID)
+		case "approve_all":
+			h.handleApproveAll(conn)
 		default:
 			log.Printf("ctl: unknown action: %s", req.Action)
 		}
@@ -115,30 +117,20 @@ func (h *Handler) handleFocus(conn net.Conn, sid string) {
 func (h *Handler) handleApprove(conn net.Conn, sid string) {
 	ok := h.state.ResolvePending(sid, model.DecisionAllow)
 	if !ok {
-		// Fallback: send keystroke via Ghostty.
+		// Fallback: write "y\n" directly to the session's TTY.
 		sessions := h.state.GetSessions()
-		found := false
 		for _, s := range sessions {
-			if s.SessionID == sid {
-				found = true
-				log.Printf("ctl: session %s ghostty_tab=%q", sid, s.GhosttyTab)
-				if s.GhosttyTab != "" {
-					ok = ghostty.SendApproval(s.GhosttyTab)
-					log.Printf("ctl: SendApproval(%q) = %v", s.GhosttyTab, ok)
+			if s.SessionID == sid && s.TTY != "" {
+				ok = ghostty.SendApprovalToTTY(s.TTY)
+				if ok {
+					log.Printf("ctl: approved %s via TTY %s", sid, s.TTY)
 				}
 				break
 			}
 		}
-		if !found {
-			log.Printf("ctl: session %s not found in %d sessions", sid, len(sessions))
-		}
-		if !ok {
-			log.Printf("ctl: approve failed for session %s", sid)
-		} else {
-			log.Printf("ctl: approved session %s via keystroke", sid)
-		}
-	} else {
-		log.Printf("ctl: approved session %s", sid)
+	}
+	if !ok {
+		log.Printf("ctl: approve failed for %s", sid)
 	}
 	writeJSON(conn, ctlResponse{OK: &ok})
 }
@@ -146,22 +138,27 @@ func (h *Handler) handleApprove(conn net.Conn, sid string) {
 func (h *Handler) handleReject(conn net.Conn, sid string) {
 	ok := h.state.ResolvePending(sid, model.DecisionDeny)
 	if !ok {
-		// Fallback: send keystroke via Ghostty.
 		sessions := h.state.GetSessions()
 		for _, s := range sessions {
-			if s.SessionID == sid && s.GhosttyTab != "" {
-				ok = ghostty.SendRejection(s.GhosttyTab)
+			if s.SessionID == sid && s.TTY != "" {
+				ok = ghostty.SendRejectionToTTY(s.TTY)
+				if ok {
+					log.Printf("ctl: rejected %s via TTY %s", sid, s.TTY)
+				}
 				break
 			}
 		}
-		if !ok {
-			log.Printf("ctl: reject failed for session %s (no pending or cooldown)", sid)
-		} else {
-			log.Printf("ctl: rejected session %s via keystroke", sid)
-		}
-	} else {
-		log.Printf("ctl: rejected session %s", sid)
 	}
+	if !ok {
+		log.Printf("ctl: reject failed for %s", sid)
+	}
+	writeJSON(conn, ctlResponse{OK: &ok})
+}
+
+func (h *Handler) handleApproveAll(conn net.Conn) {
+	count := h.state.ApproveAllPending()
+	ok := count > 0
+	log.Printf("ctl: approve_all — approved %d sessions", count)
 	writeJSON(conn, ctlResponse{OK: &ok})
 }
 

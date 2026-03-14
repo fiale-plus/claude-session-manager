@@ -64,7 +64,7 @@ func (s *Scanner) Discover() []*model.Session {
 			continue
 		}
 
-		session := sessionFromJSONL(jsonlPath, proc.pid)
+		session := sessionFromJSONL(jsonlPath, proc.pid, proc.tty)
 		if session == nil {
 			continue
 		}
@@ -89,7 +89,7 @@ func (s *Scanner) Discover() []*model.Session {
 			if err != nil || info.ModTime().Before(cutoff) {
 				continue
 			}
-			session := sessionFromJSONL(jsonlPath, 0)
+			session := sessionFromJSONL(jsonlPath, 0, "")
 			if session == nil {
 				continue
 			}
@@ -104,6 +104,7 @@ type procInfo struct {
 	pid       int
 	cwd       string
 	sessionID string
+	tty       string
 }
 
 // isClaudeCLI returns true if cmd looks like the actual `claude` CLI binary,
@@ -123,14 +124,15 @@ func isClaudeCLI(cmd string) bool {
 }
 
 func findClaudeProcesses() []procInfo {
-	// Use ps to find Claude CLI processes (avoids cgo dependency on process libs).
-	out, err := exec.Command("ps", "-eo", "pid,args").Output()
+	// Use ps to find Claude CLI processes with TTY info.
+	out, err := exec.Command("ps", "-eo", "pid,tty,args").Output()
 	if err != nil {
 		return nil
 	}
 
 	type candidate struct {
 		pid       int
+		tty       string
 		sessionID string
 	}
 	var candidates []candidate
@@ -140,25 +142,28 @@ func findClaudeProcesses() []procInfo {
 		if line == "" {
 			continue
 		}
+		// Format: "  PID TTY      COMMAND..."
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
 		var pid int
-		if _, err := fmt.Sscanf(line, "%d", &pid); err != nil {
+		if _, err := fmt.Sscanf(fields[0], "%d", &pid); err != nil {
 			continue
 		}
-		// Extract the command portion after the PID.
-		rest := strings.TrimSpace(line[strings.Index(line, " ")+1:])
-		// Get the executable (first token).
-		parts := strings.Fields(rest)
-		if len(parts) == 0 {
-			continue
+		tty := fields[1] // e.g. "ttys003" or "??"
+		if tty == "??" {
+			tty = ""
 		}
-		if !isClaudeCLI(parts[0]) {
+		// The command starts at fields[2].
+		if !isClaudeCLI(fields[2]) {
 			continue
 		}
 		// Extract session ID from --resume flag.
 		var sid string
-		for i, arg := range parts {
-			if arg == "--resume" && i+1 < len(parts) {
-				sid = parts[i+1]
+		for i, arg := range fields[2:] {
+			if arg == "--resume" && i+1 < len(fields[2:]) {
+				sid = fields[2:][i+1]
 				break
 			}
 			if strings.HasPrefix(arg, "--resume=") {
@@ -166,7 +171,7 @@ func findClaudeProcesses() []procInfo {
 				break
 			}
 		}
-		candidates = append(candidates, candidate{pid: pid, sessionID: sid})
+		candidates = append(candidates, candidate{pid: pid, tty: tty, sessionID: sid})
 	}
 
 	var result []procInfo
@@ -179,7 +184,7 @@ func findClaudeProcesses() []procInfo {
 		if cwd == "" {
 			continue
 		}
-		result = append(result, procInfo{pid: c.pid, cwd: cwd, sessionID: c.sessionID})
+		result = append(result, procInfo{pid: c.pid, cwd: cwd, sessionID: c.sessionID, tty: c.tty})
 	}
 	return result
 }
@@ -280,7 +285,7 @@ func findLatestJSONL(dir string) string {
 	return latest
 }
 
-func sessionFromJSONL(jsonlPath string, pid int) *model.Session {
+func sessionFromJSONL(jsonlPath string, pid int, tty string) *model.Session {
 	entries, err := ReadTail(jsonlPath, 50)
 	if err != nil || len(entries) == 0 {
 		return nil
@@ -309,13 +314,10 @@ func sessionFromJSONL(jsonlPath string, pid int) *model.Session {
 	activities := ExtractActivities(entries, 8)
 	motivation := ExtractMotivation(entries)
 
-	// Only extract pending tools when session is actually running (waiting for approval).
-	// In waiting/idle/dead states, any unmatched tool_use blocks are stale history
-	// where the tool_result fell outside our tail window.
+	// Scanner cannot reliably detect pending tools from JSONL —
+	// an unmatched tool_use could be executing (not blocked on permission).
+	// Only live hooks (PreToolUse) can detect real permission prompts.
 	var pendingTools []model.PendingTool
-	if st == model.StateRunning {
-		pendingTools = ExtractPendingTools(entries)
-	}
 
 	var lastActivity *time.Time
 	if len(activities) > 0 {
@@ -334,6 +336,7 @@ func sessionFromJSONL(jsonlPath string, pid int) *model.Session {
 		Activities:   activities,
 		LastText:     motivation,
 		PID:          pid,
+		TTY:          tty,
 		GitBranch:    gitBranch,
 		PendingTools: pendingTools,
 	}

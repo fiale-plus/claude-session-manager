@@ -285,7 +285,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "shift+a", "A":
-		return m, m.approveAllSafe()
+		return m, func() tea.Msg {
+			err := m.client.ApproveAll()
+			return actionResultMsg{action: "approve all", err: err}
+		}
 
 	case "esc":
 		if m.helpVisible {

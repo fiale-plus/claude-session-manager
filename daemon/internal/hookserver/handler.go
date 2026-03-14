@@ -29,7 +29,8 @@ type hookResponse struct {
 }
 
 type hookOutput struct {
-	Decision string `json:"permissionDecision,omitempty"`
+	HookEventName string `json:"hookEventName,omitempty"`
+	Decision      string `json:"permissionDecision,omitempty"`
 }
 
 // Handler processes individual hook connections.
@@ -95,12 +96,12 @@ func (h *Handler) handlePreToolUse(req hookRequest) hookResponse {
 		ToolInput: req.ToolInput,
 	}
 
-	// Check if autopilot should auto-approve.
+	// Check if autopilot should auto-approve — tells CC to skip permission prompt.
 	safety := classifyQuick(tool)
 	if h.state.ShouldAutoApprove(req.SessionID, safety) {
 		log.Printf("hook: auto-approve %s (safety=%s)", req.ToolName, safety)
 		return hookResponse{
-			HookSpecificOutput: &hookOutput{Decision: "allow"},
+			HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "allow"},
 		}
 	}
 
@@ -113,19 +114,19 @@ func (h *Handler) handlePreToolUse(req hookRequest) hookResponse {
 		switch decision {
 		case model.DecisionAllow:
 			return hookResponse{
-				HookSpecificOutput: &hookOutput{Decision: "allow"},
+				HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "allow"},
 			}
 		case model.DecisionDeny:
 			return hookResponse{
-				HookSpecificOutput: &hookOutput{Decision: "deny"},
+				HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "deny"},
 			}
 		default:
 			// Passthrough — let CC handle it normally.
 			return hookResponse{}
 		}
-	case <-time.After(25 * time.Second):
-		// Timeout — passthrough to avoid blocking CC forever.
-		log.Printf("hook: timeout waiting for decision on %s", req.ToolName)
+	case <-time.After(60 * time.Second):
+		// Timeout — passthrough to CC's default permission logic.
+		log.Printf("hook: timeout waiting for decision on %s (60s)", req.ToolName)
 		return hookResponse{}
 	}
 }

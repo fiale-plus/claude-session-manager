@@ -44,6 +44,7 @@ type Session struct {
 	LastText     string       `json:"last_text,omitempty"`
 	GhosttyTab   string       `json:"ghostty_tab,omitempty"`
 	PID          int          `json:"pid,omitempty"`
+	TTY          string       `json:"tty,omitempty"`
 	GitBranch    string       `json:"git_branch,omitempty"`
 	Autopilot    bool         `json:"autopilot"`
 

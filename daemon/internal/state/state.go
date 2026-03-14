@@ -129,6 +129,7 @@ func (m *Manager) UpdateSessionFromScanner(s *model.Session) {
 	existing.LastText = s.LastText
 	existing.LastActivity = s.LastActivity
 	existing.PID = s.PID
+	existing.TTY = s.TTY
 	existing.GitBranch = s.GitBranch
 	existing.JSONLPath = s.JSONLPath
 	existing.Slug = s.Slug
@@ -139,15 +140,7 @@ func (m *Manager) UpdateSessionFromScanner(s *model.Session) {
 		existing.ProjectName = s.ProjectName
 	}
 
-	// Classify pending tools from scanner.
-	existing.PendingTools = classifier.ClassifyPendingTools(s.PendingTools)
-	existing.HasDestructive = false
-	for _, t := range existing.PendingTools {
-		if t.Safety == model.SafetyDestructive {
-			existing.HasDestructive = true
-			break
-		}
-	}
+	// Don't touch PendingTools from scanner — only hooks set real pending state.
 
 	m.notifySubscribers()
 }
@@ -254,8 +247,48 @@ func (m *Manager) ToggleAutopilot(sid string) (bool, bool) {
 	s.Autopilot = !s.Autopilot
 	m.autopilot[sid] = s.Autopilot
 	m.saveAutopilot()
+
+	// If autopilot just turned ON, approve any pending non-destructive tool.
+	if s.Autopilot {
+		if pa, ok := m.pending[sid]; ok {
+			if pa.Tool.Safety != model.SafetyDestructive {
+				select {
+				case pa.ResponseCh <- model.DecisionAllow:
+				default:
+				}
+				delete(m.pending, sid)
+				m.cooldowns[sid] = time.Now()
+				log.Printf("state: autopilot ON — auto-approved pending tool for %s", sid)
+			}
+		}
+	}
+
 	m.notifySubscribers()
 	return s.Autopilot, true
+}
+
+// ApproveAllPending approves all non-destructive pending tools across all sessions.
+func (m *Manager) ApproveAllPending() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	count := 0
+	for sid, pa := range m.pending {
+		if pa.Tool.Safety == model.SafetyDestructive {
+			continue
+		}
+		select {
+		case pa.ResponseCh <- model.DecisionAllow:
+		default:
+		}
+		delete(m.pending, sid)
+		m.cooldowns[sid] = time.Now()
+		count++
+	}
+	if count > 0 {
+		m.notifySubscribers()
+	}
+	return count
 }
 
 // GetSessions returns a snapshot of all sessions sorted by state then session ID.

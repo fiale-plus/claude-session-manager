@@ -72,16 +72,30 @@ func renderZoom(s client.Session, width, height int) string {
 		}
 
 		var activityLines []string
-		for _, a := range s.Activities[start:] {
+		visible := s.Activities[start:]
+		total := len(visible)
+		for idx, a := range visible {
+			// Progressive fade: newest entries bright, older ones dim.
+			age := total - 1 - idx // 0 = newest
+			tsColor := colorSubtle
+			sumColor := colorDimFg
+			if age >= 4 {
+				tsColor = colorBorder
+				sumColor = colorBorder
+			} else if age >= 2 {
+				tsColor = colorBorder
+				sumColor = colorSubtle
+			}
+
 			ts := lipgloss.NewStyle().
-				Foreground(colorSubtle).
+				Foreground(tsColor).
 				Render(a.Timestamp.Format("15:04:05"))
 			icon := activityIcon(a.ActivityType)
 			iconStyled := lipgloss.NewStyle().
 				Foreground(activityColor(a.ActivityType)).
 				Render(icon)
 			summary := lipgloss.NewStyle().
-				Foreground(colorDimFg).
+				Foreground(sumColor).
 				Render(truncateMiddle(a.Summary, innerWidth-20))
 			activityLines = append(activityLines,
 				fmt.Sprintf("  %s  %s  %s", ts, iconStyled, summary))

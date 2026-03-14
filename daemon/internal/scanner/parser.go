@@ -281,22 +281,43 @@ func ExtractActivities(entries []jsonlEntry, n int) []model.Activity {
 	return activities
 }
 
-// ExtractPendingTools finds tool_use blocks without matching tool_results.
+// ExtractPendingTools finds tool_use blocks from the LAST assistant message
+// that don't have matching tool_results after it. Only looks at the final
+// assistant entry to avoid false positives from the tail window.
 func ExtractPendingTools(entries []jsonlEntry) []model.PendingTool {
-	pending := make(map[string]model.PendingTool) // tool_use id → PendingTool
 	meaningful := filterMeaningful(entries)
 
-	for _, entry := range meaningful {
-		if entry.Type == "assistant" {
-			for _, block := range parseContent(entry) {
-				if block.Type == "tool_use" && block.ID != "" {
-					pending[block.ID] = model.PendingTool{
-						ToolName:  block.Name,
-						ToolInput: block.Input,
-					}
-				}
+	// Find the last assistant entry with tool_use blocks.
+	lastAssistantIdx := -1
+	for i := len(meaningful) - 1; i >= 0; i-- {
+		if meaningful[i].Type == "assistant" && hasToolUse(meaningful[i]) {
+			lastAssistantIdx = i
+			break
+		}
+		// If we hit a system entry (turn_duration, stop_hook_summary) before
+		// finding an assistant with tool_use, the turn is done — no pending tools.
+		if meaningful[i].Type == "system" {
+			return nil
+		}
+	}
+	if lastAssistantIdx < 0 {
+		return nil
+	}
+
+	// Collect tool_use IDs from that last assistant message.
+	pending := make(map[string]model.PendingTool)
+	for _, block := range parseContent(meaningful[lastAssistantIdx]) {
+		if block.Type == "tool_use" && block.ID != "" {
+			pending[block.ID] = model.PendingTool{
+				ToolName:  block.Name,
+				ToolInput: block.Input,
 			}
-		} else if entry.Type == "user" && isToolResult(entry) {
+		}
+	}
+
+	// Remove any that have tool_results after them.
+	for _, entry := range meaningful[lastAssistantIdx+1:] {
+		if entry.Type == "user" && isToolResult(entry) {
 			for _, id := range getToolResultIDs(entry) {
 				delete(pending, id)
 			}

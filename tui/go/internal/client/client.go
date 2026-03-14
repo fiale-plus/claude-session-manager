@@ -6,6 +6,7 @@ package client
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -145,7 +146,7 @@ func (c *Client) sendCommand(req request) error {
 			return err
 		}
 		if resp.OK != nil && !*resp.OK {
-			return net.ErrClosed // signal that the command was rejected
+			return fmt.Errorf("command rejected by daemon")
 		}
 	}
 
@@ -165,6 +166,11 @@ func (c *Client) Approve(sessionID string) error {
 // Reject rejects the pending tool for the given session.
 func (c *Client) Reject(sessionID string) error {
 	return c.sendCommand(request{Action: "reject", SessionID: sessionID})
+}
+
+// ApproveAll approves all non-destructive pending tools across all sessions.
+func (c *Client) ApproveAll() error {
+	return c.sendCommand(request{Action: "approve_all"})
 }
 
 // Focus focuses the Ghostty tab for the given session.
