@@ -2,6 +2,8 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,15 @@ type disconnectedMsg struct{}
 // reconnectTickMsg triggers a reconnection attempt.
 type reconnectTickMsg struct{}
 
+// actionResultMsg carries the result of an approve/reject/autopilot action.
+type actionResultMsg struct {
+	action string // "approve", "reject", "autopilot"
+	err    error
+}
+
+// clearFlashMsg clears the status flash after a delay.
+type clearFlashMsg struct{}
+
 // Model is the top-level Bubble Tea model.
 type Model struct {
 	client       *client.Client
@@ -31,6 +42,8 @@ type Model struct {
 	connected    bool
 	width        int
 	height       int
+	flash        string // temporary status message
+	flashStyle   lipgloss.Style
 }
 
 // NewModel creates a new TUI model.
@@ -53,15 +66,10 @@ func (m Model) subscribeCmd() tea.Cmd {
 			return disconnectedMsg{}
 		}
 
-		// We need to return connectedMsg first, then start reading.
-		// We'll spawn a goroutine to feed updates and return connected.
 		go func() {
-			// This goroutine is just a pump — it does nothing once ch closes
-			// because the program will receive disconnectedMsg from waitForUpdate.
-			_ = ch // kept alive by the waitForUpdate chain
+			_ = ch
 		}()
 
-		// Store the channel in a package-level var so waitForUpdate can read it.
 		subMu.Lock()
 		subCh = ch
 		subMu.Unlock()
@@ -97,6 +105,13 @@ func reconnectAfter(d time.Duration) tea.Cmd {
 	})
 }
 
+// clearFlashAfter returns a command that clears the flash after a delay.
+func clearFlashAfter(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(_ time.Time) tea.Msg {
+		return clearFlashMsg{}
+	})
+}
+
 // Update handles messages.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -122,11 +137,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionsMsg:
 		m.sessions = msg
-		// Clamp selected index.
 		if m.selectedIdx >= len(m.sessions) {
 			m.selectedIdx = max(0, len(m.sessions)-1)
 		}
 		return m, waitForUpdate
+
+	case actionResultMsg:
+		if msg.err != nil {
+			m.flash = fmt.Sprintf("%s failed: %v", msg.action, msg.err)
+			m.flashStyle = lipgloss.NewStyle().Foreground(colorDestructive).Bold(true)
+		} else {
+			m.flash = msg.action + " sent"
+			m.flashStyle = lipgloss.NewStyle().Foreground(colorRunning)
+		}
+		return m, clearFlashAfter(2 * time.Second)
+
+	case clearFlashMsg:
+		m.flash = ""
+		return m, nil
 	}
 
 	return m, nil
@@ -136,7 +164,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		if m.queueVisible {
-			// Don't quit if queue is open — 'q' is too close to 'Q'.
 			return m, nil
 		}
 		m.client.Close()
@@ -160,25 +187,28 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "a":
 		if sel := m.selected(); sel != nil {
+			sid := sel.SessionID
 			return m, func() tea.Msg {
-				_ = m.client.ToggleAutopilot(sel.SessionID)
-				return nil
+				err := m.client.ToggleAutopilot(sid)
+				return actionResultMsg{action: "autopilot toggle", err: err}
 			}
 		}
 
 	case "enter", "y":
 		if sel := m.selected(); sel != nil && len(sel.PendingTools) > 0 {
+			sid := sel.SessionID
 			return m, func() tea.Msg {
-				_ = m.client.Approve(sel.SessionID)
-				return nil
+				err := m.client.Approve(sid)
+				return actionResultMsg{action: "approve", err: err}
 			}
 		}
 
 	case "n":
 		if sel := m.selected(); sel != nil && len(sel.PendingTools) > 0 {
+			sid := sel.SessionID
 			return m, func() tea.Msg {
-				_ = m.client.Reject(sel.SessionID)
-				return nil
+				err := m.client.Reject(sid)
+				return actionResultMsg{action: "reject", err: err}
 			}
 		}
 
@@ -187,7 +217,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "shift+a", "A":
-		// Approve all safe pending tools.
 		return m, m.approveAllSafe()
 
 	case "esc":
@@ -208,10 +237,10 @@ func (m Model) approveAllSafe() tea.Cmd {
 			if pt.Safety != "destructive" {
 				sid := s.SessionID
 				cmds = append(cmds, func() tea.Msg {
-					_ = m.client.Approve(sid)
-					return nil
+					err := m.client.Approve(sid)
+					return actionResultMsg{action: "approve", err: err}
 				})
-				break // one approve per session
+				break
 			}
 		}
 	}
@@ -245,47 +274,28 @@ func (m Model) View() string {
 
 	bottomHeight := stripHeight + hintsHeight
 
-	// Status indicator.
-	statusLine := ""
-	if !m.connected {
-		statusLine = styleStatusDisconnected.Render(" disconnected - reconnecting...")
-	} else {
-		statusLine = styleStatusConnected.Render(" connected") +
-			styleZoomBranch.Render(
-				"  " + pluralize(len(m.sessions), "session", "sessions"))
-	}
-	statusHeight := 1
+	// Status bar.
+	statusLine := renderStatusBar(m.connected, m.sessions, m.flash, m.flashStyle, w)
+	statusHeight := lipgloss.Height(statusLine)
 
 	remainingHeight := m.height - bottomHeight - statusHeight
 
 	// Main content area.
 	mainContent := ""
 	if m.queueVisible && hasPending {
-		// Queue overlay takes over the main area.
 		queueHeight := remainingHeight - 2
 		if queueHeight < 6 {
 			queueHeight = 6
 		}
 		mainContent = renderQueue(m.sessions, w, queueHeight)
 	} else if sel := m.selected(); sel != nil {
-		// Zoom panel for selected session.
 		zoomHeight := remainingHeight - 2
 		if zoomHeight < 4 {
 			zoomHeight = 4
 		}
 		mainContent = renderZoom(*sel, w, zoomHeight)
 	} else {
-		// No sessions.
-		noSessions := lipgloss.NewStyle().
-			Foreground(colorDimFg).
-			Width(w).
-			Align(lipgloss.Center).
-			Render("Waiting for Claude Code sessions...")
-		mainContent = lipgloss.NewStyle().
-			Height(remainingHeight).
-			Width(w).
-			Align(lipgloss.Center, lipgloss.Center).
-			Render(noSessions)
+		mainContent = renderEmptyState(w, remainingHeight)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -296,12 +306,106 @@ func (m Model) View() string {
 	)
 }
 
+// renderStatusBar renders the top status bar with branding, connection info, and flash.
+func renderStatusBar(connected bool, sessions []client.Session, flash string, flashStyle lipgloss.Style, width int) string {
+	logo := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorAccent).
+		Render("\u2588\u2588 CSM")
+
+	var connStatus string
+	if !connected {
+		connStatus = lipgloss.NewStyle().
+			Foreground(colorDestructive).
+			Render("\u25cf disconnected")
+	} else {
+		connStatus = lipgloss.NewStyle().
+			Foreground(colorRunning).
+			Render("\u25cf connected")
+	}
+
+	sessionCount := lipgloss.NewStyle().
+		Foreground(colorDimFg).
+		Render(pluralize(len(sessions), "session", "sessions"))
+
+	pendingStr := ""
+	pending := countPending(sessions)
+	if pending > 0 {
+		pendingStr = lipgloss.NewStyle().
+			Foreground(colorOrange).
+			Bold(true).
+			Render(fmt.Sprintf("  \u26a1 %d pending", pending))
+	}
+
+	runningStr := ""
+	running := 0
+	for _, s := range sessions {
+		if s.State == "running" {
+			running++
+		}
+	}
+	if running > 0 {
+		runningStr = lipgloss.NewStyle().
+			Foreground(colorRunning).
+			Render(fmt.Sprintf("  \u25b6 %d running", running))
+	}
+
+	left := logo + "  " + connStatus + "  " + sessionCount + runningStr + pendingStr
+
+	// Flash message (action feedback).
+	if flash != "" {
+		left += "  " + flashStyle.Render(flash)
+	}
+
+	sep := lipgloss.NewStyle().
+		Foreground(colorBorder).
+		Render(strings.Repeat("\u2500", max(0, width)))
+
+	return left + "\n" + sep
+}
+
+// renderEmptyState renders a centered empty state when no sessions exist.
+func renderEmptyState(width, height int) string {
+	art := lipgloss.NewStyle().
+		Foreground(colorAccent).
+		Bold(true).
+		Render("\u2588\u2588\u2588\u2588")
+
+	title := lipgloss.NewStyle().
+		Foreground(colorFg).
+		Bold(true).
+		Render("Claude Session Manager")
+
+	subtitle := lipgloss.NewStyle().
+		Foreground(colorDimFg).
+		Italic(true).
+		Render("Waiting for Claude Code sessions...")
+
+	hint := lipgloss.NewStyle().
+		Foreground(colorSubtle).
+		Render("Start a Claude Code session to see it here")
+
+	block := lipgloss.JoinVertical(lipgloss.Center,
+		art,
+		"",
+		title,
+		subtitle,
+		"",
+		hint,
+	)
+
+	return lipgloss.NewStyle().
+		Height(height).
+		Width(width).
+		Align(lipgloss.Center, lipgloss.Center).
+		Render(block)
+}
+
 func pluralize(n int, singular, plural string) string {
 	if n == 1 {
 		return "1 " + singular
 	}
-	return lipgloss.NewStyle().Render(
-		itoa(n) + " " + plural)
+	return itoa(n) + " " + plural
 }
 
 func itoa(n int) string {
@@ -324,10 +428,6 @@ func itoa(n int) string {
 	return s
 }
 
-// Package-level subscription channel, protected by a mutex.
-// This is needed because Bubble Tea commands are functions that
-// return messages — they can't carry state from the model directly
-// in a safe way for long-running goroutines.
 var (
 	subMu sync.Mutex
 	subCh <-chan []client.Session

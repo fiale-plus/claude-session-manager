@@ -117,7 +117,7 @@ func (c *Client) Subscribe() (<-chan []Session, error) {
 }
 
 // sendCommand opens a separate short-lived connection for a command,
-// since the main connection is taken by subscribe.
+// waits for the server response, and returns whether it succeeded.
 func (c *Client) sendCommand(req request) error {
 	conn, err := net.Dial("unix", c.socketPath)
 	if err != nil {
@@ -125,13 +125,31 @@ func (c *Client) sendCommand(req request) error {
 	}
 	defer conn.Close()
 
+	// Set a deadline so we don't hang forever.
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
 	data, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	_, err = conn.Write(data)
-	return err
+	if _, err := conn.Write(data); err != nil {
+		return err
+	}
+
+	// Read the server response to ensure it was processed.
+	scanner := bufio.NewScanner(conn)
+	if scanner.Scan() {
+		var resp serverEvent
+		if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
+			return err
+		}
+		if resp.OK != nil && !*resp.OK {
+			return net.ErrClosed // signal that the command was rejected
+		}
+	}
+
+	return nil
 }
 
 // ToggleAutopilot toggles autopilot for the given session.

@@ -189,11 +189,13 @@ func (m *Manager) ResolvePending(sid string, decision model.ApprovalDecision) bo
 
 	pa, ok := m.pending[sid]
 	if !ok {
+		log.Printf("state: ResolvePending(%s) — no pending entry found (pending map has %d entries)", sid, len(m.pending))
 		return false
 	}
 
-	// Check cooldown (prevent double-approve).
-	if last, ok := m.cooldowns[sid]; ok && time.Since(last) < 2*time.Second {
+	// Check cooldown (prevent double-approve within a short window).
+	if last, ok := m.cooldowns[sid]; ok && time.Since(last) < 500*time.Millisecond {
+		log.Printf("state: cooldown active for session %s, skipping", sid)
 		return false
 	}
 

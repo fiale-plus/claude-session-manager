@@ -99,11 +99,21 @@ func (h *Handler) handleToggleAutopilot(conn net.Conn, sid string) {
 
 func (h *Handler) handleApprove(conn net.Conn, sid string) {
 	ok := h.state.ResolvePending(sid, model.DecisionAllow)
+	if !ok {
+		log.Printf("ctl: approve failed for session %s (no pending or cooldown)", sid)
+	} else {
+		log.Printf("ctl: approved session %s", sid)
+	}
 	writeJSON(conn, ctlResponse{OK: &ok})
 }
 
 func (h *Handler) handleReject(conn net.Conn, sid string) {
 	ok := h.state.ResolvePending(sid, model.DecisionDeny)
+	if !ok {
+		log.Printf("ctl: reject failed for session %s (no pending or cooldown)", sid)
+	} else {
+		log.Printf("ctl: rejected session %s", sid)
+	}
 	writeJSON(conn, ctlResponse{OK: &ok})
 }
 
