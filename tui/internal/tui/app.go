@@ -3,6 +3,7 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -267,11 +268,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "enter", "return":
-		if sel := m.selected(); sel != nil {
-			sid := sel.SessionID
+		if sel := m.selected(); sel != nil && sel.GhosttyTab != "" {
+			tabName := sel.GhosttyTab
 			return m, func() tea.Msg {
-				err := m.client.Focus(sid)
-				return actionResultMsg{action: "focus", err: err}
+				// Run osascript directly from TUI process (has Accessibility via Ghostty).
+				safeName := strings.ReplaceAll(strings.ReplaceAll(tabName, `\`, `\\`), `"`, `\"`)
+				script := fmt.Sprintf(`tell application "System Events" to tell process "Ghostty"
+    click radio button "%s" of tab group 1 of window 1
+end tell`, safeName)
+				err := exec.Command("osascript", "-e", script).Run()
+				if err != nil {
+					return actionResultMsg{action: "focus", err: err}
+				}
+				return actionResultMsg{action: "focus"}
 			}
 		}
 
