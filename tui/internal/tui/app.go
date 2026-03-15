@@ -51,6 +51,7 @@ type Model struct {
 	flashStyle   lipgloss.Style
 	glowPos      int
 	glowDir      int // 1 or -1 for ping-pong
+	scrollOffset int // scroll position in zoom body
 }
 
 // NewModel creates a new TUI model.
@@ -225,6 +226,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "left":
 		if m.selectedIdx > 0 {
 			m.selectedIdx--
+			m.scrollOffset = 0
 			if m.selectedIdx < len(m.sessions) {
 				m.selectedSID = m.sessions[m.selectedIdx].SessionID
 			}
@@ -234,10 +236,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "right", "l":
 		if m.selectedIdx < len(m.sessions)-1 {
 			m.selectedIdx++
+			m.scrollOffset = 0 // reset scroll on session change
 			if m.selectedIdx < len(m.sessions) {
 				m.selectedSID = m.sessions[m.selectedIdx].SessionID
 			}
 		}
+		return m, nil
+
+	case "up", "k":
+		if m.scrollOffset > 0 {
+			m.scrollOffset--
+		}
+		return m, nil
+
+	case "down", "j":
+		m.scrollOffset++
 		return m, nil
 
 	case "h":
@@ -363,7 +376,7 @@ func (m Model) View() string {
 	if m.queueVisible && hasPending {
 		mainContent = renderQueue(m.sessions, w, remainingHeight)
 	} else if sel := m.selected(); sel != nil {
-		mainContent = renderZoom(*sel, w, remainingHeight)
+		mainContent = renderZoom(*sel, w, remainingHeight, m.scrollOffset)
 	} else {
 		mainContent = renderEmptyState(w, remainingHeight)
 	}

@@ -13,6 +13,7 @@ func renderHints(queueVisible bool, hasPending bool, width int) string {
 		desc string
 	}{
 		{"\u2190\u2192", "navigate"},
+		{"\u2191\u2193", "scroll"},
 		{"Enter", "focus"},
 		{"a", "autopilot"},
 	}
