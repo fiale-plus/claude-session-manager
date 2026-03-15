@@ -19,7 +19,7 @@ func renderQueue(sessions []client.Session, width, height int) string {
 	// Title with count badge.
 	total := countPending(sessions)
 	countBadge := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#ffffff")).
+		Foreground(lipgloss.ANSIColor(15)).
 		Background(colorOrange).
 		Bold(true).
 		Padding(0, 1).

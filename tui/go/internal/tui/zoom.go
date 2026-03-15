@@ -19,7 +19,7 @@ func renderZoom(s client.Session, width, height int) string {
 
 	// ── Header: project + state badge + branch ──────────────────
 	stateStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#000000")).
+		Foreground(lipgloss.ANSIColor(0)).
 		Background(stateColor(s.State)).
 		Bold(true).
 		Padding(0, 1)
@@ -121,7 +121,7 @@ func renderZoom(s client.Session, width, height int) string {
 				fmt.Sprintf("  %s %s", marker, toolStyle.Render(toolLabel)))
 		}
 		countBadge := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#ffffff")).
+			Foreground(lipgloss.ANSIColor(15)).
 			Background(colorOrange).
 			Bold(true).
 			Padding(0, 1).
@@ -204,7 +204,7 @@ func activityIcon(actType string) string {
 }
 
 // activityColor returns a color for activity type icons.
-func activityColor(actType string) lipgloss.Color {
+func activityColor(actType string) lipgloss.TerminalColor {
 	switch actType {
 	case "tool_use":
 		return colorAccent
@@ -213,7 +213,7 @@ func activityColor(actType string) lipgloss.Color {
 	case "thinking":
 		return colorWaiting
 	case "user_message":
-		return lipgloss.Color("#38bdf8") // sky blue
+		return lipgloss.ANSIColor(6) // cyan
 	case "system":
 		return colorOrange
 	default:

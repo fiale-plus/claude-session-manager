@@ -84,7 +84,7 @@ func renderPill(s client.Session, selected bool, glowPos int) string {
 	// Pending badge.
 	if n := len(s.PendingTools); n > 0 {
 		badgeStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#ffffff")).
+			Foreground(lipgloss.ANSIColor(15)).
 			Background(colorBadgeBg).
 			Bold(true).
 			Padding(0, 1)
@@ -105,7 +105,7 @@ func renderPill(s client.Session, selected bool, glowPos int) string {
 		}
 		style = style.
 			Bold(true).
-			Foreground(lipgloss.Color("#ffffff")).
+			Foreground(lipgloss.ANSIColor(15)).
 			Background(sc).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(accentColor)

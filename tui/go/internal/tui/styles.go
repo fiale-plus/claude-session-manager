@@ -2,40 +2,40 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
+// All colors use ANSI 0-15 palette so they adapt to the terminal's theme.
 var (
-	// ── State colors ─────────────────────────────────────────────
-	colorRunning     = lipgloss.Color("#22c55e") // vibrant green
-	colorRunningDim  = lipgloss.Color("#166534") // muted green for bg
-	colorWaiting     = lipgloss.Color("#facc15") // bright yellow
-	colorWaitingDim  = lipgloss.Color("#854d0e") // muted amber
-	colorIdle        = lipgloss.Color("#94a3b8") // slate gray
-	colorIdleDim     = lipgloss.Color("#334155") // dark slate
-	colorDead        = lipgloss.Color("#64748b") // cool gray
-	colorDeadDim     = lipgloss.Color("#1e293b") // dark cool gray
-	colorDestructive = lipgloss.Color("#ef4444") // red
-	colorOrange      = lipgloss.Color("#f97316") // orange
+	// ── State colors (from terminal palette) ────────────────────
+	colorRunning     = lipgloss.ANSIColor(2)  // green
+	colorRunningDim  = lipgloss.ANSIColor(22) // dark green (256-color)
+	colorWaiting     = lipgloss.ANSIColor(3)  // yellow
+	colorWaitingDim  = lipgloss.ANSIColor(58) // dark yellow (256-color)
+	colorIdle        = lipgloss.ANSIColor(8)  // bright black / gray
+	colorIdleDim     = lipgloss.ANSIColor(0)  // black
+	colorDead        = lipgloss.ANSIColor(8)  // bright black / gray
+	colorDeadDim     = lipgloss.ANSIColor(0)  // black
+	colorDestructive = lipgloss.ANSIColor(1)  // red
+	colorOrange      = lipgloss.ANSIColor(3)  // yellow (closest ANSI)
 
 	// ── UI chrome ────────────────────────────────────────────────
-	colorFg        = lipgloss.Color("#f1f5f9") // near-white slate
-	colorDimFg     = lipgloss.Color("#64748b") // muted text
-	colorSubtle    = lipgloss.Color("#475569") // subtle separators
-	colorBorder    = lipgloss.Color("#334155") // panel borders
-	colorAccent    = lipgloss.Color("#6366f1") // indigo accent
-	colorAccentDim = lipgloss.Color("#312e81") // dark indigo
-	colorBg        = lipgloss.Color("#0f172a") // deep navy bg
-	colorPanelBg   = lipgloss.Color("#1e293b") // panel bg
-	colorCardBg    = lipgloss.Color("#1e293b") // card bg
-	colorBadgeBg   = lipgloss.Color("#7c3aed") // purple badge
+	colorFg        = lipgloss.ANSIColor(15) // bright white
+	colorDimFg     = lipgloss.ANSIColor(8)  // bright black / gray
+	colorSubtle    = lipgloss.ANSIColor(8)  // bright black / gray
+	colorBorder    = lipgloss.ANSIColor(8)  // bright black / gray
+	colorAccent    = lipgloss.ANSIColor(4)  // blue
+	colorAccentDim = lipgloss.ANSIColor(0)  // black
+	colorBg        = lipgloss.ANSIColor(0)  // black (terminal bg)
+	colorPanelBg   = lipgloss.ANSIColor(0)  // black
+	colorCardBg    = lipgloss.ANSIColor(0)  // black
+	colorBadgeBg   = lipgloss.ANSIColor(5)  // magenta
 
 	// ── Section label color ──────────────────────────────────────
-	colorLabel = lipgloss.Color("#a5b4fc") // light indigo for labels
+	colorLabel = lipgloss.ANSIColor(12) // bright blue
 
 	// ── Zoom Panel ───────────────────────────────────────────────
 	styleZoomPanel = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).
-			Padding(1, 2).
-			Background(colorPanelBg)
+			Padding(1, 2)
 
 	styleZoomHeader = lipgloss.NewStyle().
 			Bold(true).
@@ -76,8 +76,7 @@ var (
 	styleQueuePanel = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorOrange).
-			Padding(1, 2).
-			Background(colorPanelBg)
+			Padding(1, 2)
 
 	styleQueueTitle = lipgloss.NewStyle().
 			Bold(true).
@@ -108,19 +107,19 @@ var (
 	// ── Autopilot badge ──────────────────────────────────────────
 	styleAutopilotOn = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#000000")).
+			Foreground(lipgloss.ANSIColor(0)).
 			Background(colorRunning).
 			Padding(0, 1)
 
 	styleAutopilotWarn = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("#000000")).
+				Foreground(lipgloss.ANSIColor(0)).
 				Background(colorOrange).
 				Padding(0, 1)
 )
 
-// stateColor returns the lipgloss color for a session state.
-func stateColor(state string) lipgloss.Color {
+// stateColor returns the color for a session state.
+func stateColor(state string) lipgloss.TerminalColor {
 	switch state {
 	case "running":
 		return colorRunning
@@ -136,7 +135,7 @@ func stateColor(state string) lipgloss.Color {
 }
 
 // stateColorDim returns a muted background shade for a session state.
-func stateColorDim(state string) lipgloss.Color {
+func stateColorDim(state string) lipgloss.TerminalColor {
 	switch state {
 	case "running":
 		return colorRunningDim
