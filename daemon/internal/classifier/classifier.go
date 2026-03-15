@@ -179,13 +179,65 @@ func classifyBash(toolInput map[string]any) model.ToolSafety {
 		return model.SafetyUnknown
 	}
 
+	// Split compound commands (&&, ||, ;, |) and classify each part.
+	// If ANY part is destructive → DESTRUCTIVE.
+	// If ALL parts are safe → SAFE.
+	// Otherwise → UNKNOWN.
+	parts := splitCompound(command)
+	allSafe := true
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		s := classifySingleCommand(part)
+		if s == model.SafetyDestructive {
+			return model.SafetyDestructive
+		}
+		if s != model.SafetySafe {
+			allSafe = false
+		}
+	}
+	if allSafe {
+		return model.SafetySafe
+	}
+	return model.SafetyUnknown
+}
+
+// splitCompound breaks a command string on &&, ||, ;, and | operators.
+func splitCompound(command string) []string {
+	// Split on &&, ||, ; and | (but not ||)
+	var parts []string
+	current := command
+	for {
+		idx := -1
+		sepLen := 0
+		// Find earliest separator.
+		for _, sep := range []string{"&&", "||", ";", "|"} {
+			i := strings.Index(current, sep)
+			if i >= 0 && (idx < 0 || i < idx) {
+				idx = i
+				sepLen = len(sep)
+			}
+		}
+		if idx < 0 {
+			parts = append(parts, current)
+			break
+		}
+		parts = append(parts, current[:idx])
+		current = current[idx+sepLen:]
+	}
+	return parts
+}
+
+// classifySingleCommand classifies a single (non-compound) command.
+func classifySingleCommand(command string) model.ToolSafety {
 	// Destructive patterns override everything.
 	for _, pat := range destructivePatterns {
 		if pat.MatchString(command) {
 			return model.SafetyDestructive
 		}
 	}
-	// --force (not followed by hyphen/word char) is destructive.
 	if isForceFlag(command) {
 		return model.SafetyDestructive
 	}
