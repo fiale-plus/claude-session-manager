@@ -20,7 +20,7 @@ type Session struct {
 	CWD            string        `json:"cwd"`
 	ProjectName    string        `json:"project_name"`
 	State          string        `json:"state"`
-	Autopilot      bool          `json:"autopilot"`
+	AutopilotMode  string        `json:"autopilot_mode"`
 	HasDestructive bool          `json:"has_destructive"`
 	PendingTools   []PendingTool `json:"pending_tools,omitempty"`
 	GhosttyTab     string        `json:"ghostty_tab,omitempty"`

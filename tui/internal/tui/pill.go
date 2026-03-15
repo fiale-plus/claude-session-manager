@@ -98,9 +98,9 @@ func renderPill(s client.Session, selected bool, glowPos int) string {
 
 	if selected {
 		accentColor := colorAccent
-		if s.Autopilot && s.HasDestructive {
+		if s.AutopilotMode == "yolo" {
 			accentColor = colorOrange
-		} else if s.Autopilot {
+		} else if s.AutopilotMode == "on" {
 			accentColor = colorRunning
 		}
 		style = style.

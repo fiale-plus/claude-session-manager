@@ -17,10 +17,10 @@ type ctlRequest struct {
 }
 
 type ctlResponse struct {
-	OK        *bool           `json:"ok,omitempty"`
-	Sessions  []model.Session `json:"sessions,omitempty"`
-	Event     string          `json:"event,omitempty"`
-	Autopilot *bool           `json:"autopilot,omitempty"`
+	OK            *bool           `json:"ok,omitempty"`
+	Sessions      []model.Session `json:"sessions,omitempty"`
+	Event         string          `json:"event,omitempty"`
+	AutopilotMode string          `json:"autopilot_mode,omitempty"`
 }
 
 type Handler struct {
@@ -76,8 +76,8 @@ func (h *Handler) handleSubscribe(conn net.Conn) {
 }
 
 func (h *Handler) handleToggleAutopilot(conn net.Conn, sid string) {
-	newState, ok := h.state.ToggleAutopilot(sid)
-	writeJSON(conn, ctlResponse{OK: &ok, Autopilot: &newState})
+	mode, ok := h.state.CycleAutopilot(sid)
+	writeJSON(conn, ctlResponse{OK: &ok, AutopilotMode: mode})
 }
 
 func (h *Handler) handleFocus(conn net.Conn, sid string) {

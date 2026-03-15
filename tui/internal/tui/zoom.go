@@ -37,15 +37,14 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	}
 	headerLines = append(headerLines, line1)
 
-	// Line 2: autopilot badge (if on)
-	if s.Autopilot {
-		apStyle := styleAutopilotOn
+	// Line 2: autopilot badge
+	switch s.AutopilotMode {
+	case "on":
+		headerLines = append(headerLines, "   "+styleAutopilotOn.Render("\u2699 AUTOPILOT"))
+	case "yolo":
+		apLine := "   " + styleAutopilotWarn.Render("\u26a0 YOLO")
 		if s.HasDestructive {
-			apStyle = styleAutopilotWarn
-		}
-		apLine := "   " + apStyle.Render("\u2699 AUTOPILOT")
-		if s.HasDestructive {
-			apLine += "  " + styleDestructive.Render("\u26a0 destructive pending")
+			apLine += "  " + styleDestructive.Render("destructive pending!")
 		}
 		headerLines = append(headerLines, apLine)
 	}

@@ -104,16 +104,46 @@ func (h *Handler) handlePreToolUse(req hookRequest) hookResponse {
 		ToolInput: req.ToolInput,
 	}
 
-	// Check if autopilot should auto-approve — tells CC to skip permission prompt.
+	// Check if autopilot should auto-approve.
 	safety := classifyQuick(tool)
-	if h.state.ShouldAutoApprove(req.SessionID, safety) {
+	approve, grace := h.state.ShouldAutoApprove(req.SessionID, safety)
+	if approve {
 		log.Printf("hook: auto-approve %s (safety=%s)", req.ToolName, safety)
 		return hookResponse{
 			HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "allow"},
 		}
 	}
+	if grace {
+		// YOLO mode: destructive tool gets a grace period.
+		// Add to pending so TUI shows it blinking, then auto-approve after delay.
+		log.Printf("hook: YOLO grace period for %s (destructive, 10s)", req.ToolName)
+		decisionCh := h.state.AddPending(req.SessionID, tool)
+		go func() {
+			time.Sleep(10 * time.Second)
+			// Auto-approve if still pending (user didn't reject).
+			h.state.ResolvePending(req.SessionID, model.DecisionAllow)
+		}()
+		select {
+		case decision := <-decisionCh:
+			switch decision {
+			case model.DecisionAllow:
+				return hookResponse{
+					HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "allow"},
+				}
+			case model.DecisionDeny:
+				return hookResponse{
+					HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "deny"},
+				}
+			default:
+				return hookResponse{}
+			}
+		case <-time.After(60 * time.Second):
+			log.Printf("hook: timeout waiting for decision on %s (60s)", req.ToolName)
+			return hookResponse{}
+		}
+	}
 
-	// If destructive or autopilot is off, add to pending queue and wait for user.
+	// Autopilot off or destructive without YOLO: add to pending queue and wait.
 	decisionCh := h.state.AddPending(req.SessionID, tool)
 
 	// Wait for user decision (from TUI or timeout).

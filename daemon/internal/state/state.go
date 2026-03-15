@@ -30,8 +30,8 @@ type Manager struct {
 	// sessions maps session_id → Session.
 	sessions map[string]*model.Session
 
-	// autopilot maps session_id → enabled. Persisted to disk.
-	autopilot map[string]bool
+	// autopilot maps session_id → mode ("off"/"on"/"yolo"). Persisted to disk.
+	autopilot map[string]string
 
 	// pending maps session_id → PendingApproval (at most one per session).
 	pending map[string]*model.PendingApproval
@@ -50,7 +50,7 @@ type Manager struct {
 func New() *Manager {
 	m := &Manager{
 		sessions:  make(map[string]*model.Session),
-		autopilot: make(map[string]bool),
+		autopilot: make(map[string]string),
 		pending:   make(map[string]*model.PendingApproval),
 		cooldowns: make(map[string]time.Time),
 	}
@@ -85,8 +85,8 @@ func (m *Manager) RegisterSession(sid, cwd, permMode string) {
 	s.ProjectName = filepath.Base(cwd)
 
 	// Restore persisted autopilot state.
-	if ap, ok := m.autopilot[sid]; ok {
-		s.Autopilot = ap
+	if mode, ok := m.autopilot[sid]; ok && mode != "" {
+		s.AutopilotMode = mode
 	}
 
 	m.notifySubscribers()
@@ -114,8 +114,8 @@ func (m *Manager) UpdateSessionFromScanner(s *model.Session) {
 	existing, ok := m.sessions[s.SessionID]
 	if !ok {
 		// New session from scanner.
-		if ap, okAP := m.autopilot[s.SessionID]; okAP {
-			s.Autopilot = ap
+		if mode, okAP := m.autopilot[s.SessionID]; okAP && mode != "" {
+			s.AutopilotMode = mode
 		}
 		m.sessions[s.SessionID] = s
 		m.notifySubscribers()
@@ -231,52 +231,76 @@ func (m *Manager) ResolvePending(sid string, decision model.ApprovalDecision) bo
 }
 
 // ShouldAutoApprove checks if autopilot should auto-approve a tool for this session.
-func (m *Manager) ShouldAutoApprove(sid string, safety model.ToolSafety) bool {
+// Returns: approve immediately, or "grace" for YOLO destructive (delayed approve).
+func (m *Manager) ShouldAutoApprove(sid string, safety model.ToolSafety) (bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	s, ok := m.sessions[sid]
 	if !ok {
-		return false
+		return false, false
 	}
-	if !s.Autopilot {
-		return false
+	switch s.AutopilotMode {
+	case model.AutopilotOn:
+		// ON: approve safe+unknown, block destructive.
+		return safety != model.SafetyDestructive, false
+	case model.AutopilotYolo:
+		if safety == model.SafetyDestructive {
+			// YOLO + destructive: grace period (caller handles the delay).
+			return false, true
+		}
+		return true, false
+	default:
+		return false, false
 	}
-	// Only auto-approve safe and unknown tools. Destructive always needs manual.
-	return safety != model.SafetyDestructive
 }
 
-// ToggleAutopilot toggles autopilot for a session, returning the new state.
-func (m *Manager) ToggleAutopilot(sid string) (bool, bool) {
+// CycleAutopilot cycles autopilot mode: off → on → yolo → off.
+// Returns (new mode, ok).
+func (m *Manager) CycleAutopilot(sid string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	s, ok := m.sessions[sid]
 	if !ok {
-		return false, false
+		return "", false
 	}
 
-	s.Autopilot = !s.Autopilot
-	m.autopilot[sid] = s.Autopilot
+	switch s.AutopilotMode {
+	case model.AutopilotOn:
+		s.AutopilotMode = model.AutopilotYolo
+	case model.AutopilotYolo:
+		s.AutopilotMode = model.AutopilotOff
+	default:
+		s.AutopilotMode = model.AutopilotOn
+	}
+	m.autopilot[sid] = s.AutopilotMode
 	m.saveAutopilot()
 
-	// If autopilot just turned ON, approve any pending non-destructive tool.
-	if s.Autopilot {
-		if pa, ok := m.pending[sid]; ok {
-			if pa.Tool.Safety != model.SafetyDestructive {
-				select {
-				case pa.ResponseCh <- model.DecisionAllow:
-				default:
-				}
-				delete(m.pending, sid)
-				m.cooldowns[sid] = time.Now()
-				log.Printf("state: autopilot ON — auto-approved pending tool for %s", sid)
+	// Approve pending tools based on new mode.
+	if pa, ok := m.pending[sid]; ok {
+		shouldApprove := false
+		switch s.AutopilotMode {
+		case model.AutopilotOn:
+			// ON: approve safe+unknown only.
+			shouldApprove = pa.Tool.Safety != model.SafetyDestructive
+		case model.AutopilotYolo:
+			// YOLO: approve everything immediately.
+			shouldApprove = true
+		}
+		if shouldApprove {
+			select {
+			case pa.ResponseCh <- model.DecisionAllow:
+			default:
 			}
+			delete(m.pending, sid)
+			m.cooldowns[sid] = time.Now()
+			log.Printf("state: autopilot %s — approved pending %s for %s", s.AutopilotMode, pa.Tool.ToolName, sid)
 		}
 	}
 
 	m.notifySubscribers()
-	return s.Autopilot, true
+	return s.AutopilotMode, true
 }
 
 // ApproveAllPending approves all non-destructive pending tools across all sessions.

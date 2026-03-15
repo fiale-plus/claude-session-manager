@@ -31,6 +31,13 @@ type Activity struct {
 	Detail       string       `json:"detail,omitempty"`
 }
 
+// Autopilot modes.
+const (
+	AutopilotOff  = "off"
+	AutopilotOn   = "on"   // auto-approve safe+unknown, block destructive
+	AutopilotYolo = "yolo" // auto-approve all, grace period for destructive
+)
+
 // Session represents a Claude Code session.
 type Session struct {
 	SessionID    string       `json:"session_id"`
@@ -46,7 +53,8 @@ type Session struct {
 	PID          int          `json:"pid,omitempty"`
 	TTY          string       `json:"tty,omitempty"`
 	GitBranch    string       `json:"git_branch,omitempty"`
-	Autopilot    bool         `json:"autopilot"`
+	// AutopilotMode: "off", "on" (safe only), "yolo" (all, with grace period for destructive)
+	AutopilotMode string `json:"autopilot_mode"`
 
 	// Derived fields (set by state manager)
 	HasDestructive bool           `json:"has_destructive"`
