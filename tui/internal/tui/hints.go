@@ -6,50 +6,67 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// renderHints renders the keyboard hints bar with styled key badges.
+// renderHints renders the keyboard hints bar, fitting as many hints as the
+// width allows.  The last hint is always "h help" so the user knows how to
+// discover the rest.
 func renderHints(queueVisible bool, hasPending bool, width int) string {
-	keys := []struct {
+	type hint struct {
 		key  string
 		desc string
-	}{
-		{"\u2190\u2192", "navigate"},
-		{"\u2191\u2193", "scroll"},
-		{"Enter", "focus"},
-		{"a", "autopilot"},
 	}
 
+	// Build ordered hint list — "h help" is always last.
+	var keys []hint
+	keys = append(keys, hint{"\u2190\u2192\u2191\u2193", "navigate"})
+	keys = append(keys, hint{"Enter", "focus"})
+	keys = append(keys, hint{"a", "autopilot"})
+
 	if hasPending {
-		keys = append(keys,
-			struct{ key, desc string }{"y", "approve"},
-			struct{ key, desc string }{"n", "reject"},
-		)
+		keys = append(keys, hint{"y", "approve"}, hint{"n", "reject"})
 	}
 
 	if queueVisible {
-		keys = append(keys, struct{ key, desc string }{"Esc", "close queue"})
+		keys = append(keys, hint{"Esc", "close queue"})
 	} else {
-		keys = append(keys, struct{ key, desc string }{"Q", "queue"})
+		keys = append(keys, hint{"Q", "queue"})
 	}
 
 	if hasPending {
-		keys = append(keys, struct{ key, desc string }{"A", "approve all safe"})
+		keys = append(keys, hint{"A", "approve all"})
 	}
 
-	keys = append(keys,
-		struct{ key, desc string }{"h", "help"},
-		struct{ key, desc string }{"q", "quit"},
-	)
+	// "h help" is the anchor — always shown last.
+	anchor := hint{"h", "help"}
 
 	sep := styleHintSep.Render(" \u2502 ")
+	sepWidth := lipgloss.Width(sep)
 
-	line := ""
-	for i, k := range keys {
-		if i > 0 {
-			line += sep
+	// Pre-render anchor to know its width.
+	anchorRendered := styleHintKey.Render(anchor.key) + " " + anchor.desc
+	anchorWidth := lipgloss.Width(anchorRendered)
+
+	// Available width for non-anchor hints (account for padding(0,1) = 2 chars).
+	budget := width - 2 - anchorWidth - sepWidth
+
+	var parts []string
+	used := 0
+	for _, k := range keys {
+		part := styleHintKey.Render(k.key) + " " + k.desc
+		partWidth := lipgloss.Width(part)
+		needed := partWidth
+		if len(parts) > 0 {
+			needed += sepWidth
 		}
-		line += styleHintKey.Render(k.key) + " " + k.desc
+		if used+needed > budget {
+			break
+		}
+		parts = append(parts, part)
+		used += needed
 	}
 
+	parts = append(parts, anchorRendered)
+
+	line := strings.Join(parts, sep)
 	return styleHintsBar.Width(width).Render(line)
 }
 
