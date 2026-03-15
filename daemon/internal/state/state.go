@@ -76,7 +76,7 @@ func (m *Manager) RegisterSession(sid, cwd, permMode string) {
 		s = &model.Session{
 			SessionID: sid,
 			CWD:       cwd,
-			State:     model.StateRunning,
+			State:     model.StateIdle,
 		}
 		m.sessions[sid] = s
 	}

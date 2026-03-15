@@ -151,9 +151,18 @@ func DetectState(entries []jsonlEntry) model.SessionState {
 
 	last := meaningful[len(meaningful)-1]
 
-	// System turn_duration or stop_hook_summary → waiting.
-	if last.Type == "system" && (last.Subtype == "turn_duration" || last.Subtype == "stop_hook_summary") {
-		return model.StateWaiting
+	// System entries that indicate the turn ended → waiting.
+	if last.Type == "system" {
+		switch last.Subtype {
+		case "turn_duration", "stop_hook_summary", "local_command":
+			return model.StateWaiting
+		}
+	}
+
+	// Non-standard entry types at the end (custom-title, agent-name, etc.)
+	// mean the session is idle, not running.
+	if last.Type != "user" && last.Type != "assistant" && last.Type != "system" {
+		return model.StateIdle
 	}
 
 	// Walk backward looking for pending tool_use.
