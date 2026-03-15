@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -193,7 +194,10 @@ func install() {
 		fmt.Println("loaded launchd service")
 	}
 
-	// 3. Install Ghostty integration.
+	// 3. Install HTTP hooks in ~/.claude/settings.json.
+	installHooks(home)
+
+	// 4. Install Ghostty integration.
 	installGhostty(home)
 
 	fmt.Println("installation complete")
@@ -220,7 +224,10 @@ func uninstall() {
 		fmt.Println("removed plugin")
 	}
 
-	// 3. Remove Ghostty integration.
+	// 3. Remove HTTP hooks from ~/.claude/settings.json.
+	uninstallHooks(home)
+
+	// 4. Remove Ghostty integration.
 	uninstallGhostty(home)
 
 	// 4. Clean up sockets.
@@ -269,6 +276,98 @@ func daemonBinaryPath() string {
 		return exe
 	}
 	return abs
+}
+
+// --- HTTP hooks in ~/.claude/settings.json ---
+
+func installHooks(home string) {
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+
+	// Read existing settings.
+	var settings map[string]any
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		settings = make(map[string]any)
+	} else {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			log.Printf("warning: cannot parse %s: %v", settingsPath, err)
+			return
+		}
+	}
+
+	// Check if hooks already present.
+	if hooks, ok := settings["hooks"]; ok {
+		if hooksMap, ok := hooks.(map[string]any); ok {
+			if _, ok := hooksMap["PreToolUse"]; ok {
+				fmt.Println("HTTP hooks already in settings.json")
+				return
+			}
+		}
+	}
+
+	// Add hooks.
+	hookURL := fmt.Sprintf("http://127.0.0.1:%s/hooks", hookserver.DefaultHTTPPort)
+	settings["hooks"] = map[string]any{
+		"PreToolUse": []any{
+			map[string]any{
+				"matcher": "*",
+				"hooks": []any{
+					map[string]any{
+						"type":    "http",
+						"url":     hookURL,
+						"timeout": 90,
+					},
+				},
+			},
+		},
+		"SessionStart": []any{
+			map[string]any{
+				"matcher": "*",
+				"hooks": []any{
+					map[string]any{
+						"type":    "http",
+						"url":     hookURL,
+						"timeout": 5,
+					},
+				},
+			},
+		},
+	}
+
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		log.Printf("warning: cannot marshal settings: %v", err)
+		return
+	}
+	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
+		log.Printf("warning: cannot write %s: %v", settingsPath, err)
+		return
+	}
+	fmt.Println("added HTTP hooks to ~/.claude/settings.json")
+}
+
+func uninstallHooks(home string) {
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return
+	}
+	if _, ok := settings["hooks"]; !ok {
+		return
+	}
+	delete(settings, "hooks")
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
+		return
+	}
+	fmt.Println("removed HTTP hooks from ~/.claude/settings.json")
 }
 
 // --- Ghostty integration ---

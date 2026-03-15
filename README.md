@@ -46,38 +46,10 @@ cd daemon && go build -o csm-daemon . && ./csm-daemon install
 cd ../tui && go build -o csm .
 ```
 
-Add HTTP hooks to `~/.claude/settings.json` (one-time):
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://127.0.0.1:19380/hooks",
-            "timeout": 90
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://127.0.0.1:19380/hooks",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+`csm-daemon install` does everything:
+- Installs launchd service (daemon starts at login)
+- Adds HTTP hooks to `~/.claude/settings.json`
+- Installs Ghostty integration (shader + keybinds)
 
 Restart your Claude Code sessions for hooks to take effect.
 
