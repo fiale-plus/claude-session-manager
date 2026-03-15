@@ -187,9 +187,18 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	}
 
 	body := strings.Join(all, "\n")
-	return lipgloss.NewStyle().
+	rendered := lipgloss.NewStyle().
 		Width(width).
 		Render(body)
+
+	// Hard clip rendered output to allocated height — lipgloss Width() can
+	// wrap long lines and produce more lines than we budgeted for, which
+	// pushes the strip off-screen.
+	renderedLines := strings.Split(rendered, "\n")
+	if len(renderedLines) > height {
+		renderedLines = renderedLines[:height]
+	}
+	return strings.Join(renderedLines, "\n")
 }
 
 func activityIcon(actType string) string {
