@@ -13,7 +13,7 @@ Monitor and control multiple Claude Code sessions from a single terminal dashboa
 ── Last Output
   "All 42 tests passed."
 ────────────────────────────────────────────────
-←→ navigate │ ↑↓ scroll │ Enter focus │ a autopilot
+←→↑↓ navigate │ Enter focus │ a autopilot │ h help
  ▶ my-project   ⏸ other-project   ⏸ api-server
 ```
 
@@ -64,7 +64,9 @@ cd tui && ./csm
 | Key | Action |
 |-----|--------|
 | `←` `→` | Navigate between session pills |
-| `↑` `↓` | Scroll activities / last output |
+| `↑` `↓` | Scroll detail panel |
+| `Home` / `End` | Jump to first / last session |
+| `PgUp` / `PgDn` | Scroll 5 lines at a time |
 | `Enter` | Focus — switch to session's Ghostty tab |
 | `a` | Cycle autopilot: OFF → ON → YOLO → OFF |
 | `y` | Approve pending tool call |
