@@ -1,0 +1,628 @@
+package state
+
+import (
+	"testing"
+	"time"
+
+	"github.com/pchaganti/claude-session-manager/daemon/internal/model"
+)
+
+// newTestManager creates a Manager without disk persistence.
+func newTestManager() *Manager {
+	return &Manager{
+		sessions:  make(map[string]*model.Session),
+		autopilot: make(map[string]string),
+		pending:   make(map[string]*model.PendingApproval),
+		cooldowns: make(map[string]time.Time),
+	}
+}
+
+// --- RegisterSession / UnregisterSession ---
+
+func TestRegisterSession(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/home/user/project", "default")
+
+	sessions := m.GetSessions()
+	if len(sessions) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(sessions))
+	}
+	s := sessions[0]
+	if s.SessionID != "s1" {
+		t.Errorf("session_id = %q, want s1", s.SessionID)
+	}
+	if s.CWD != "/home/user/project" {
+		t.Errorf("cwd = %q, want /home/user/project", s.CWD)
+	}
+	if s.PermissionMode != "default" {
+		t.Errorf("permission_mode = %q, want default", s.PermissionMode)
+	}
+	if s.ProjectName != "project" {
+		t.Errorf("project_name = %q, want project", s.ProjectName)
+	}
+	if s.State != model.StateIdle {
+		t.Errorf("state = %q, want idle", s.State)
+	}
+}
+
+func TestRegisterSessionUpdatesExisting(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/old/path", "default")
+	m.RegisterSession("s1", "/new/path", "plan")
+
+	sessions := m.GetSessions()
+	if len(sessions) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(sessions))
+	}
+	if sessions[0].CWD != "/new/path" {
+		t.Errorf("cwd = %q, want /new/path", sessions[0].CWD)
+	}
+	if sessions[0].PermissionMode != "plan" {
+		t.Errorf("permission_mode = %q, want plan", sessions[0].PermissionMode)
+	}
+}
+
+func TestRegisterSessionRestoresAutopilot(t *testing.T) {
+	m := newTestManager()
+	m.autopilot["s1"] = model.AutopilotOn
+	m.RegisterSession("s1", "/path", "default")
+
+	sessions := m.GetSessions()
+	if sessions[0].AutopilotMode != model.AutopilotOn {
+		t.Errorf("autopilot = %q, want on", sessions[0].AutopilotMode)
+	}
+}
+
+func TestUnregisterSession(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+	m.UnregisterSession("s1")
+
+	sessions := m.GetSessions()
+	if len(sessions) != 0 {
+		t.Errorf("got %d sessions, want 0", len(sessions))
+	}
+}
+
+func TestUnregisterSessionClosesPending(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	tool := model.PendingTool{ToolName: "Bash", ToolInput: map[string]any{"command": "ls"}}
+	ch := m.AddPending("s1", tool)
+
+	m.UnregisterSession("s1")
+
+	// Channel should be closed.
+	select {
+	case _, ok := <-ch:
+		if ok {
+			// Got a value — channel might have been written to before close.
+		}
+	default:
+		// Channel might already be drained.
+	}
+
+	if m.GetPending("s1") != nil {
+		t.Error("pending should be cleaned up after unregister")
+	}
+}
+
+// --- CycleAutopilot ---
+
+func TestCycleAutopilot(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	// off → on
+	mode, ok := m.CycleAutopilot("s1")
+	if !ok || mode != model.AutopilotOn {
+		t.Errorf("cycle 1: got (%q, %v), want (on, true)", mode, ok)
+	}
+
+	// on → yolo
+	mode, ok = m.CycleAutopilot("s1")
+	if !ok || mode != model.AutopilotYolo {
+		t.Errorf("cycle 2: got (%q, %v), want (yolo, true)", mode, ok)
+	}
+
+	// yolo → off
+	mode, ok = m.CycleAutopilot("s1")
+	if !ok || mode != model.AutopilotOff {
+		t.Errorf("cycle 3: got (%q, %v), want (off, true)", mode, ok)
+	}
+}
+
+func TestCycleAutopilotUnknownSession(t *testing.T) {
+	m := newTestManager()
+	mode, ok := m.CycleAutopilot("nonexistent")
+	if ok {
+		t.Errorf("expected ok=false for unknown session, got mode=%q", mode)
+	}
+}
+
+func TestCycleAutopilotApprovesPendingSafe(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	// Add a safe pending tool.
+	tool := model.PendingTool{ToolName: "Read", ToolInput: map[string]any{"file_path": "/a.py"}}
+	ch := m.AddPending("s1", tool)
+
+	// Cycle to ON — should auto-approve safe tool.
+	m.CycleAutopilot("s1")
+
+	select {
+	case decision := <-ch:
+		if decision != model.DecisionAllow {
+			t.Errorf("expected allow, got %q", decision)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("expected decision on channel, timed out")
+	}
+}
+
+func TestCycleAutopilotOnBlocksDestructive(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	// Add a destructive pending tool.
+	tool := model.PendingTool{ToolName: "Bash", ToolInput: map[string]any{"command": "git push"}}
+	ch := m.AddPending("s1", tool)
+
+	// Cycle to ON — should NOT approve destructive.
+	m.CycleAutopilot("s1")
+
+	select {
+	case <-ch:
+		t.Error("destructive tool should NOT be approved in ON mode")
+	case <-time.After(50 * time.Millisecond):
+		// Expected: no decision.
+	}
+
+	// Pending should still be there.
+	if m.GetPending("s1") == nil {
+		t.Error("pending should still exist for destructive tool in ON mode")
+	}
+}
+
+func TestCycleAutopilotYoloApprovesAll(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	// Add a destructive pending tool.
+	tool := model.PendingTool{ToolName: "Bash", ToolInput: map[string]any{"command": "git push"}}
+	ch := m.AddPending("s1", tool)
+
+	// Cycle to ON, then to YOLO.
+	m.CycleAutopilot("s1") // off → on (destructive stays pending)
+
+	// We need to re-add since the pending map was cleared or not.
+	// Actually in ON mode destructive stays pending, so cycle again:
+	m.CycleAutopilot("s1") // on → yolo (should approve everything)
+
+	select {
+	case decision := <-ch:
+		if decision != model.DecisionAllow {
+			t.Errorf("YOLO should approve destructive, got %q", decision)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("expected decision in YOLO mode, timed out")
+	}
+}
+
+// --- AddPending / ResolvePending ---
+
+func TestAddPendingAndResolve(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	tool := model.PendingTool{ToolName: "Bash", ToolInput: map[string]any{"command": "docker run ubuntu"}}
+	ch := m.AddPending("s1", tool)
+
+	// Verify pending exists.
+	pa := m.GetPending("s1")
+	if pa == nil {
+		t.Fatal("expected pending approval")
+	}
+	if pa.Tool.ToolName != "Bash" {
+		t.Errorf("tool = %q, want Bash", pa.Tool.ToolName)
+	}
+
+	// Resolve with allow.
+	ok := m.ResolvePending("s1", model.DecisionAllow)
+	if !ok {
+		t.Error("ResolvePending should return true")
+	}
+
+	select {
+	case decision := <-ch:
+		if decision != model.DecisionAllow {
+			t.Errorf("decision = %q, want allow", decision)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("no decision received")
+	}
+
+	// Pending should be cleared.
+	if m.GetPending("s1") != nil {
+		t.Error("pending should be nil after resolve")
+	}
+}
+
+func TestResolveNonexistentPending(t *testing.T) {
+	m := newTestManager()
+	ok := m.ResolvePending("nonexistent", model.DecisionAllow)
+	if ok {
+		t.Error("ResolvePending for nonexistent should return false")
+	}
+}
+
+func TestResolvePendingCooldown(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	// First approval.
+	tool := model.PendingTool{ToolName: "Read", ToolInput: map[string]any{"file_path": "/a"}}
+	m.AddPending("s1", tool)
+	m.ResolvePending("s1", model.DecisionAllow)
+
+	// Immediately add and try to resolve again (within cooldown).
+	tool2 := model.PendingTool{ToolName: "Read", ToolInput: map[string]any{"file_path": "/b"}}
+	m.AddPending("s1", tool2)
+	ok := m.ResolvePending("s1", model.DecisionAllow)
+	if ok {
+		t.Error("second resolve within cooldown should return false")
+	}
+}
+
+func TestResolvePendingDeny(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	tool := model.PendingTool{ToolName: "Bash", ToolInput: map[string]any{"command": "rm -rf /"}}
+	ch := m.AddPending("s1", tool)
+
+	ok := m.ResolvePending("s1", model.DecisionDeny)
+	if !ok {
+		t.Error("ResolvePending deny should return true")
+	}
+
+	select {
+	case d := <-ch:
+		if d != model.DecisionDeny {
+			t.Errorf("decision = %q, want deny", d)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("no decision received")
+	}
+}
+
+// --- ApproveAllPending ---
+
+func TestApproveAllPending(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path1", "default")
+	m.RegisterSession("s2", "/path2", "default")
+	m.RegisterSession("s3", "/path3", "default")
+
+	// s1: safe tool.
+	ch1 := m.AddPending("s1", model.PendingTool{ToolName: "Read", ToolInput: map[string]any{"file_path": "/a"}})
+	// s2: destructive tool.
+	ch2 := m.AddPending("s2", model.PendingTool{ToolName: "Bash", ToolInput: map[string]any{"command": "rm file"}})
+	// s3: unknown tool.
+	ch3 := m.AddPending("s3", model.PendingTool{ToolName: "Bash", ToolInput: map[string]any{"command": "docker build ."}})
+
+	count := m.ApproveAllPending()
+	// Should approve s1 (safe) and s3 (unknown), skip s2 (destructive).
+	if count != 2 {
+		t.Errorf("approved %d, want 2", count)
+	}
+
+	// s1 should be approved.
+	select {
+	case d := <-ch1:
+		if d != model.DecisionAllow {
+			t.Errorf("s1 decision = %q, want allow", d)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("s1: no decision")
+	}
+
+	// s2 should still be pending.
+	if m.GetPending("s2") == nil {
+		t.Error("s2 (destructive) should still be pending")
+	}
+	_ = ch2
+
+	// s3 should be approved.
+	select {
+	case d := <-ch3:
+		if d != model.DecisionAllow {
+			t.Errorf("s3 decision = %q, want allow", d)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("s3: no decision")
+	}
+}
+
+func TestApproveAllPendingNone(t *testing.T) {
+	m := newTestManager()
+	count := m.ApproveAllPending()
+	if count != 0 {
+		t.Errorf("approved %d, want 0", count)
+	}
+}
+
+// --- GetSessions ---
+
+func TestGetSessionsFiltersDeadNoPID(t *testing.T) {
+	m := newTestManager()
+	m.mu.Lock()
+	m.sessions["s1"] = &model.Session{SessionID: "s1", State: model.StateDead, PID: 0}
+	m.sessions["s2"] = &model.Session{SessionID: "s2", State: model.StateDead, PID: 12345}
+	m.sessions["s3"] = &model.Session{SessionID: "s3", State: model.StateRunning}
+	m.mu.Unlock()
+
+	sessions := m.GetSessions()
+	if len(sessions) != 2 {
+		t.Fatalf("got %d sessions, want 2 (dead+PID=0 should be filtered)", len(sessions))
+	}
+}
+
+func TestGetSessionsSortsByState(t *testing.T) {
+	m := newTestManager()
+	m.mu.Lock()
+	m.sessions["s-idle"] = &model.Session{SessionID: "s-idle", State: model.StateIdle, PID: 1}
+	m.sessions["s-running"] = &model.Session{SessionID: "s-running", State: model.StateRunning, PID: 2}
+	m.sessions["s-waiting"] = &model.Session{SessionID: "s-waiting", State: model.StateWaiting, PID: 3}
+	m.sessions["s-dead"] = &model.Session{SessionID: "s-dead", State: model.StateDead, PID: 4}
+	m.mu.Unlock()
+
+	sessions := m.GetSessions()
+	if len(sessions) != 4 {
+		t.Fatalf("got %d sessions, want 4", len(sessions))
+	}
+	expected := []model.SessionState{model.StateRunning, model.StateWaiting, model.StateIdle, model.StateDead}
+	for i, s := range sessions {
+		if s.State != expected[i] {
+			t.Errorf("sessions[%d].State = %q, want %q", i, s.State, expected[i])
+		}
+	}
+}
+
+func TestGetSessionsSortsByIDWithinState(t *testing.T) {
+	m := newTestManager()
+	m.mu.Lock()
+	m.sessions["s-b"] = &model.Session{SessionID: "s-b", State: model.StateRunning, PID: 1}
+	m.sessions["s-a"] = &model.Session{SessionID: "s-a", State: model.StateRunning, PID: 2}
+	m.mu.Unlock()
+
+	sessions := m.GetSessions()
+	if len(sessions) != 2 {
+		t.Fatalf("got %d, want 2", len(sessions))
+	}
+	if sessions[0].SessionID != "s-a" {
+		t.Errorf("first = %q, want s-a", sessions[0].SessionID)
+	}
+}
+
+// --- ShouldAutoApprove ---
+
+func TestShouldAutoApproveOff(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+	// Default is off.
+
+	approve, grace := m.ShouldAutoApprove("s1", model.SafetySafe)
+	if approve || grace {
+		t.Errorf("OFF mode: approve=%v, grace=%v, want false/false", approve, grace)
+	}
+}
+
+func TestShouldAutoApproveOn(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+	m.CycleAutopilot("s1") // off → on
+
+	// Safe → approve.
+	approve, grace := m.ShouldAutoApprove("s1", model.SafetySafe)
+	if !approve || grace {
+		t.Errorf("ON+safe: approve=%v, grace=%v, want true/false", approve, grace)
+	}
+
+	// Unknown → approve.
+	approve, grace = m.ShouldAutoApprove("s1", model.SafetyUnknown)
+	if !approve || grace {
+		t.Errorf("ON+unknown: approve=%v, grace=%v, want true/false", approve, grace)
+	}
+
+	// Destructive → block.
+	approve, grace = m.ShouldAutoApprove("s1", model.SafetyDestructive)
+	if approve || grace {
+		t.Errorf("ON+destructive: approve=%v, grace=%v, want false/false", approve, grace)
+	}
+}
+
+func TestShouldAutoApproveYolo(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+	m.CycleAutopilot("s1") // off → on
+	m.CycleAutopilot("s1") // on → yolo
+
+	// Safe → approve.
+	approve, grace := m.ShouldAutoApprove("s1", model.SafetySafe)
+	if !approve || grace {
+		t.Errorf("YOLO+safe: approve=%v, grace=%v, want true/false", approve, grace)
+	}
+
+	// Unknown → approve.
+	approve, grace = m.ShouldAutoApprove("s1", model.SafetyUnknown)
+	if !approve || grace {
+		t.Errorf("YOLO+unknown: approve=%v, grace=%v, want true/false", approve, grace)
+	}
+
+	// Destructive → grace.
+	approve, grace = m.ShouldAutoApprove("s1", model.SafetyDestructive)
+	if approve || !grace {
+		t.Errorf("YOLO+destructive: approve=%v, grace=%v, want false/true", approve, grace)
+	}
+}
+
+func TestShouldAutoApproveUnknownSession(t *testing.T) {
+	m := newTestManager()
+	approve, grace := m.ShouldAutoApprove("nonexistent", model.SafetySafe)
+	if approve || grace {
+		t.Errorf("unknown session: approve=%v, grace=%v, want false/false", approve, grace)
+	}
+}
+
+// --- SetSlug / SetGhosttyTab ---
+
+func TestSetSlug(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+	m.SetSlug("s1", "my-slug")
+
+	sessions := m.GetSessions()
+	if sessions[0].Slug != "my-slug" {
+		t.Errorf("slug = %q, want my-slug", sessions[0].Slug)
+	}
+}
+
+func TestSetSlugNonexistentSession(t *testing.T) {
+	m := newTestManager()
+	// Should not panic.
+	m.SetSlug("nonexistent", "slug")
+}
+
+func TestSetGhosttyTab(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+	m.SetGhosttyTab("s1", "Terminal 1")
+
+	sessions := m.GetSessions()
+	if sessions[0].GhosttyTab != "Terminal 1" {
+		t.Errorf("ghostty_tab = %q, want Terminal 1", sessions[0].GhosttyTab)
+	}
+}
+
+func TestSetGhosttyTabNonexistent(t *testing.T) {
+	m := newTestManager()
+	// Should not panic.
+	m.SetGhosttyTab("nonexistent", "tab")
+}
+
+// --- Subscriber notifications ---
+
+func TestSubscriberNotifications(t *testing.T) {
+	m := newTestManager()
+	ch := m.Subscribe()
+	defer m.Unsubscribe(ch)
+
+	// Register should trigger notification.
+	m.RegisterSession("s1", "/path", "default")
+
+	select {
+	case <-ch:
+		// Good.
+	case <-time.After(100 * time.Millisecond):
+		t.Error("expected notification on register")
+	}
+}
+
+func TestSubscriberMultipleNotifications(t *testing.T) {
+	m := newTestManager()
+	ch := m.Subscribe()
+	defer m.Unsubscribe(ch)
+
+	m.RegisterSession("s1", "/path", "default")
+	m.SetSlug("s1", "slug")
+	m.UnregisterSession("s1")
+
+	// Drain all notifications.
+	count := 0
+	for {
+		select {
+		case <-ch:
+			count++
+		case <-time.After(50 * time.Millisecond):
+			goto done
+		}
+	}
+done:
+	if count < 2 {
+		t.Errorf("expected at least 2 notifications, got %d", count)
+	}
+}
+
+func TestUnsubscribe(t *testing.T) {
+	m := newTestManager()
+	ch := m.Subscribe()
+	m.Unsubscribe(ch)
+
+	// Registering after unsubscribe should not panic or send.
+	m.RegisterSession("s1", "/path", "default")
+
+	// Channel should be closed.
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Error("channel should be closed after unsubscribe")
+		}
+	case <-time.After(50 * time.Millisecond):
+		// Also acceptable if nothing comes through.
+	}
+}
+
+// --- AddPending sets safety and HasDestructive ---
+
+func TestAddPendingSetsDestructiveFlag(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	tool := model.PendingTool{ToolName: "Bash", ToolInput: map[string]any{"command": "rm -rf /"}}
+	m.AddPending("s1", tool)
+
+	sessions := m.GetSessions()
+	if !sessions[0].HasDestructive {
+		t.Error("HasDestructive should be true for rm -rf")
+	}
+}
+
+func TestAddPendingSafeNotDestructive(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	tool := model.PendingTool{ToolName: "Read", ToolInput: map[string]any{"file_path": "/a.py"}}
+	m.AddPending("s1", tool)
+
+	sessions := m.GetSessions()
+	if sessions[0].HasDestructive {
+		t.Error("HasDestructive should be false for Read")
+	}
+}
+
+func TestResolvePendingClearsPendingTools(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+
+	tool := model.PendingTool{ToolName: "Bash", ToolInput: map[string]any{"command": "rm file"}}
+	m.AddPending("s1", tool)
+
+	// Verify pending tools on session.
+	sessions := m.GetSessions()
+	if len(sessions[0].PendingTools) != 1 {
+		t.Fatalf("pending_tools = %d, want 1", len(sessions[0].PendingTools))
+	}
+
+	m.ResolvePending("s1", model.DecisionAllow)
+
+	sessions = m.GetSessions()
+	if len(sessions[0].PendingTools) != 0 {
+		t.Errorf("pending_tools should be cleared after resolve, got %d", len(sessions[0].PendingTools))
+	}
+	if sessions[0].HasDestructive {
+		t.Error("HasDestructive should be false after resolve")
+	}
+}

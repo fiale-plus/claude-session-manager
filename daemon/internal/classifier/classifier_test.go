@@ -222,3 +222,174 @@ func TestClassifyPendingTools(t *testing.T) {
 		t.Errorf("result[2] = %q, want safe", result[2].Safety)
 	}
 }
+
+// --- Additional tests for compound commands and edge cases ---
+
+func TestCompoundMixedSafeDestructiveUnknown(t *testing.T) {
+	// Destructive wins over unknown.
+	got := ClassifyTool("Bash", map[string]any{"command": "docker build . && git push && ls"})
+	if got != model.SafetyDestructive {
+		t.Errorf("mixed safe/destructive/unknown = %q, want destructive", got)
+	}
+
+	// Unknown + safe = unknown.
+	got = ClassifyTool("Bash", map[string]any{"command": "ls && terraform apply && echo done"})
+	if got != model.SafetyUnknown {
+		t.Errorf("safe + unknown + safe = %q, want unknown", got)
+	}
+}
+
+func TestCompoundEmptyParts(t *testing.T) {
+	// Empty parts from trailing/leading separators should be ignored.
+	tests := []struct {
+		cmd  string
+		want model.ToolSafety
+	}{
+		{"ls && ", model.SafetySafe},
+		{" && ls", model.SafetySafe},
+		{"ls ;  ; echo hello", model.SafetySafe},
+	}
+	for _, tt := range tests {
+		got := ClassifyTool("Bash", map[string]any{"command": tt.cmd})
+		if got != tt.want {
+			t.Errorf("compound(%q) = %q, want %q", tt.cmd, got, tt.want)
+		}
+	}
+}
+
+func TestCompoundTrailingSeparators(t *testing.T) {
+	// Command with just separators between safe commands.
+	got := ClassifyTool("Bash", map[string]any{"command": "ls; echo hi; pwd"})
+	if got != model.SafetySafe {
+		t.Errorf("semicolons = %q, want safe", got)
+	}
+
+	got = ClassifyTool("Bash", map[string]any{"command": "ls || echo hi"})
+	if got != model.SafetySafe {
+		t.Errorf("double-pipe = %q, want safe", got)
+	}
+}
+
+func TestSplitCompoundDirectly(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{"ls", 1},
+		{"ls && echo hello", 2},
+		{"ls | grep foo | sort", 3},
+		{"ls; pwd; date", 3},
+		{"ls || echo fallback", 2},
+		{"a && b || c; d | e", 5},
+	}
+	for _, tt := range tests {
+		parts := splitCompound(tt.input)
+		if len(parts) != tt.want {
+			t.Errorf("splitCompound(%q) = %d parts, want %d (parts: %v)", tt.input, len(parts), tt.want, parts)
+		}
+	}
+}
+
+func TestIsForceFlag(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"git push --force", true},
+		{"git push --force origin main", true},
+		{"npm install --force", true},
+		{"curl --force-redirect http://example.com", false},
+		{"some-cmd --forceful", false},
+		{"some-cmd --force-clean", false},
+		{"some-cmd --force123", false},
+		{"no force here", false},
+		{"--force", true},
+	}
+	for _, tt := range tests {
+		got := isForceFlag(tt.cmd)
+		if got != tt.want {
+			t.Errorf("isForceFlag(%q) = %v, want %v", tt.cmd, got, tt.want)
+		}
+	}
+}
+
+func TestIsGitCheckoutBranch(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"git checkout main", true},
+		{"git checkout feature-branch", true},
+		{"git checkout -b new-branch", true},
+		{"git checkout -- file.py", false},
+		{"git checkout -- .", false},
+		{"not-git checkout main", false},
+		{"echo git checkout main", false},
+	}
+	for _, tt := range tests {
+		got := isGitCheckoutBranch(tt.cmd)
+		if got != tt.want {
+			t.Errorf("isGitCheckoutBranch(%q) = %v, want %v", tt.cmd, got, tt.want)
+		}
+	}
+}
+
+func TestBareRmIsDestructive(t *testing.T) {
+	// "rm" at end of string, no trailing space.
+	got := ClassifyTool("Bash", map[string]any{"command": "rm"})
+	if got != model.SafetyDestructive {
+		t.Errorf("bare rm = %q, want destructive", got)
+	}
+}
+
+func TestSafeCommandExactMatch(t *testing.T) {
+	// Commands that are exact matches (no args).
+	for _, cmd := range []string{"ls", "pwd", "date", "env"} {
+		got := ClassifyTool("Bash", map[string]any{"command": cmd})
+		if got != model.SafetySafe {
+			t.Errorf("exact(%q) = %q, want safe", cmd, got)
+		}
+	}
+}
+
+func TestSafeCommandWithTabSeparator(t *testing.T) {
+	got := ClassifyTool("Bash", map[string]any{"command": "ls\t-la"})
+	if got != model.SafetySafe {
+		t.Errorf("tab-separated = %q, want safe", got)
+	}
+}
+
+func TestWhitespaceOnlyCommand(t *testing.T) {
+	got := ClassifyTool("Bash", map[string]any{"command": "   "})
+	if got != model.SafetyUnknown {
+		t.Errorf("whitespace only = %q, want unknown", got)
+	}
+}
+
+func TestClassifyPendingToolsEmpty(t *testing.T) {
+	result := ClassifyPendingTools(nil)
+	if len(result) != 0 {
+		t.Errorf("nil input = %d results, want 0", len(result))
+	}
+	result = ClassifyPendingTools([]model.PendingTool{})
+	if len(result) != 0 {
+		t.Errorf("empty input = %d results, want 0", len(result))
+	}
+}
+
+func TestDestructivePatternsInMiddleOfCommand(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want model.ToolSafety
+	}{
+		{"echo 'about to push' && git push", model.SafetyDestructive},
+		{"cd /tmp && rm -rf build/", model.SafetyDestructive},
+		{"npm test && npm publish", model.SafetyDestructive},
+	}
+	for _, tt := range tests {
+		got := ClassifyTool("Bash", map[string]any{"command": tt.cmd})
+		if got != tt.want {
+			t.Errorf("Bash(%q) = %q, want %q", tt.cmd, got, tt.want)
+		}
+	}
+}
