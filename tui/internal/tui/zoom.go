@@ -178,7 +178,10 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	// ═══════════════════════════════════════════════════════════
 	all := append(headerLines, visibleBody...)
 
-	// Pad to full height
+	// Hard clip to exact height (header + body, no overflow).
+	if len(all) > height {
+		all = all[:height]
+	}
 	for len(all) < height {
 		all = append(all, "")
 	}
@@ -186,7 +189,6 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	body := strings.Join(all, "\n")
 	return lipgloss.NewStyle().
 		Width(width).
-		Height(height).
 		Render(body)
 }
 

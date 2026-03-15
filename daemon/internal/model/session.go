@@ -49,8 +49,9 @@ type Session struct {
 	LastActivity *time.Time   `json:"last_activity_time,omitempty"`
 	Activities   []Activity   `json:"activities,omitempty"`
 	LastText     string       `json:"last_text,omitempty"`
-	GhosttyTab   string       `json:"ghostty_tab,omitempty"`
-	PID          int          `json:"pid,omitempty"`
+	GhosttyTab      string    `json:"ghostty_tab,omitempty"`
+	GhosttyTabIndex int       `json:"ghostty_tab_index"`
+	PID             int       `json:"pid,omitempty"`
 	TTY          string       `json:"tty,omitempty"`
 	GitBranch    string       `json:"git_branch,omitempty"`
 	// AutopilotMode: "off", "on" (safe only), "yolo" (all, with grace period for destructive)

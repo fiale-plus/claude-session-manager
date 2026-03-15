@@ -88,30 +88,39 @@ func GetTabs() []Tab {
 }
 
 // CorrelateTab finds the Ghostty tab for a given working directory.
-// Also matches if session CWD is a subdirectory of a tab's working directory.
-func CorrelateTab(cwd string) string {
+// Returns (tab name, tab index). Index is 1-based.
+func CorrelateTab(cwd string) (string, int) {
 	cwd = strings.TrimRight(cwd, "/")
-	for _, tab := range GetTabs() {
+	tabs := GetTabs()
+	// Exact match first.
+	for _, tab := range tabs {
 		tabDir := strings.TrimRight(tab.WorkingDirectory, "/")
 		if tabDir == cwd {
-			return tab.Name
+			return tab.Name, tab.Index
 		}
 	}
-	for _, tab := range GetTabs() {
+	// Subdirectory match.
+	for _, tab := range tabs {
 		tabDir := strings.TrimRight(tab.WorkingDirectory, "/")
 		if strings.HasPrefix(cwd, tabDir+"/") {
-			return tab.Name
+			return tab.Name, tab.Index
 		}
 	}
-	return ""
+	return "", 0
 }
 
-// SwitchToTab switches to a Ghostty tab by name via System Events.
-func SwitchToTab(tabName string) bool {
-	safeName := strings.ReplaceAll(strings.ReplaceAll(tabName, `\`, `\\`), `"`, `\"`)
+// SwitchToTabByIndex switches to a Ghostty tab by its 1-based index.
+// Uses index instead of name because tab names have animated spinner prefixes.
+func SwitchToTabByIndex(index int) bool {
 	script := fmt.Sprintf(`tell application "System Events" to tell process "Ghostty"
-    click radio button "%s" of tab group 1 of window 1
-end tell`, safeName)
+    set tabGroup to tab group 1 of window 1
+    set allButtons to every radio button of tabGroup
+    if (count of allButtons) >= %d then
+        click item %d of allButtons
+        return true
+    end if
+    return false
+end tell`, index, index)
 	_, err := runOsascript(script)
 	return err == nil
 }

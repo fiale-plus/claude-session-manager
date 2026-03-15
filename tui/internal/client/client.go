@@ -23,7 +23,8 @@ type Session struct {
 	AutopilotMode  string        `json:"autopilot_mode"`
 	HasDestructive bool          `json:"has_destructive"`
 	PendingTools   []PendingTool `json:"pending_tools,omitempty"`
-	GhosttyTab     string        `json:"ghostty_tab,omitempty"`
+	GhosttyTab      string       `json:"ghostty_tab,omitempty"`
+	GhosttyTabIndex int          `json:"ghostty_tab_index"`
 	GitBranch      string        `json:"git_branch,omitempty"`
 	LastText       string        `json:"last_text,omitempty"`
 	Activities     []Activity    `json:"activities,omitempty"`

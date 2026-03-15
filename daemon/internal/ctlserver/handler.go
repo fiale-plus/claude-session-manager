@@ -83,10 +83,10 @@ func (h *Handler) handleToggleAutopilot(conn net.Conn, sid string) {
 func (h *Handler) handleFocus(conn net.Conn, sid string) {
 	ok := false
 	for _, s := range h.state.GetSessions() {
-		if s.SessionID == sid && s.GhosttyTab != "" {
-			ok = ghostty.SwitchToTab(s.GhosttyTab)
+		if s.SessionID == sid && s.GhosttyTabIndex > 0 {
+			ok = ghostty.SwitchToTabByIndex(s.GhosttyTabIndex)
 			if ok {
-				log.Printf("ctl: focused %s → tab %q", sid, s.GhosttyTab)
+				log.Printf("ctl: focused %s → tab index %d", sid, s.GhosttyTabIndex)
 			}
 			break
 		}

@@ -268,14 +268,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "enter", "return":
-		if sel := m.selected(); sel != nil && sel.GhosttyTab != "" {
-			tabName := sel.GhosttyTab
+		if sel := m.selected(); sel != nil && sel.GhosttyTabIndex > 0 {
+			tabIdx := sel.GhosttyTabIndex
 			return m, func() tea.Msg {
-				// Run osascript directly from TUI process (has Accessibility via Ghostty).
-				safeName := strings.ReplaceAll(strings.ReplaceAll(tabName, `\`, `\\`), `"`, `\"`)
+				// Switch by tab index — stable unlike names with animated spinners.
 				script := fmt.Sprintf(`tell application "System Events" to tell process "Ghostty"
-    click radio button "%s" of tab group 1 of window 1
-end tell`, safeName)
+    set tabGroup to tab group 1 of window 1
+    set allButtons to every radio button of tabGroup
+    if (count of allButtons) >= %d then
+        click item %d of allButtons
+    end if
+end tell`, tabIdx, tabIdx)
 				err := exec.Command("osascript", "-e", script).Run()
 				if err != nil {
 					return actionResultMsg{action: "focus", err: err}

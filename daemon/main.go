@@ -105,9 +105,9 @@ func ghosttyLoop(st *state.Manager, stop <-chan struct{}) {
 			sessions := st.GetSessions()
 			for _, s := range sessions {
 				if s.CWD != "" && s.GhosttyTab == "" {
-					tabName := ghostty.CorrelateTab(s.CWD)
+					tabName, tabIndex := ghostty.CorrelateTab(s.CWD)
 					if tabName != "" {
-						st.SetGhosttyTab(s.SessionID, tabName)
+						st.SetGhosttyTab(s.SessionID, tabName, tabIndex)
 					}
 				}
 			}
