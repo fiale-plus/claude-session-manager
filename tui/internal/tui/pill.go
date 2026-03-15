@@ -42,6 +42,13 @@ func isAutoSlug(slug string) bool {
 	return true
 }
 
+// cleanTabName strips Ghostty prefixes like "✳ " (unsaved indicator).
+func cleanTabName(name string) string {
+	// Strip common prefixes: ✳, ●, etc.
+	name = strings.TrimLeft(name, "✳●○◉◎ ")
+	return strings.TrimSpace(name)
+}
+
 // pillName picks the best display name for a session:
 // 1. User-set slug (via /rename) — not auto-generated
 // 2. Ghostty tab title (if not a command)
@@ -54,8 +61,9 @@ func pillName(s client.Session) string {
 		return s.Slug
 	}
 	// Ghostty tab title if it's a real name.
-	if s.GhosttyTab != "" && !looksLikeCommand(s.GhosttyTab) {
-		return s.GhosttyTab
+	tab := cleanTabName(s.GhosttyTab)
+	if tab != "" && !looksLikeCommand(tab) {
+		return tab
 	}
 	// Auto slug is still better than directory name.
 	if s.Slug != "" {
