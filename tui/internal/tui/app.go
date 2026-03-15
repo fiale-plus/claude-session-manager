@@ -393,12 +393,19 @@ func (m Model) View() string {
 		mainContent = renderEmptyState(w, remainingHeight)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	output := lipgloss.JoinVertical(lipgloss.Left,
 		statusLine,
 		mainContent,
 		hints,
 		strip,
 	)
+
+	// Hard clip to terminal height to prevent overflow pushing status bar off screen.
+	lines := strings.Split(output, "\n")
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderStatusBar renders the top status bar with branding, connection info, and flash.
