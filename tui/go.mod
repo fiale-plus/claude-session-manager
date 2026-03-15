@@ -1,4 +1,4 @@
-module github.com/pchaganti/claude-session-manager/tui-go
+module github.com/pchaganti/claude-session-manager/tui
 
 go 1.26.1
 

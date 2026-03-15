@@ -9,7 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/pchaganti/claude-session-manager/tui-go/internal/client"
+	"github.com/pchaganti/claude-session-manager/tui/internal/client"
 )
 
 // sessionsMsg carries a session update from the daemon.

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/pchaganti/claude-session-manager/tui-go/internal/client"
+	"github.com/pchaganti/claude-session-manager/tui/internal/client"
 )
 
 // renderZoom renders the expanded session detail panel.

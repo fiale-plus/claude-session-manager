@@ -5,8 +5,8 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/pchaganti/claude-session-manager/tui-go/internal/client"
-	"github.com/pchaganti/claude-session-manager/tui-go/internal/tui"
+	"github.com/pchaganti/claude-session-manager/tui/internal/client"
+	"github.com/pchaganti/claude-session-manager/tui/internal/tui"
 )
 
 func main() {

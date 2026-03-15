@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/pchaganti/claude-session-manager/tui-go/internal/client"
+	"github.com/pchaganti/claude-session-manager/tui/internal/client"
 )
 
 // renderStrip renders the horizontal session pill strip at the bottom.
