@@ -39,6 +39,15 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 		line1 += " " + styleAutopilotWarn.Render("\u26a0 YOLO")
 	}
 
+	if s.PermissionMode == "plan" {
+		line1 += " " + lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.ANSIColor(0)).
+			Background(lipgloss.ANSIColor(5)).
+			Padding(0, 1).
+			Render("PLAN")
+	}
+
 	if s.GitBranch != "" {
 		line1 += "  " + lipgloss.NewStyle().Foreground(colorAccent).
 			Render("\ue0a0 "+s.GitBranch)
@@ -50,8 +59,8 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	infoParts = append(infoParts, fmt.Sprintf("PID %d", s.PID))
 	infoParts = append(infoParts, truncateMiddle(s.CWD, innerWidth-35))
 	if s.LastActivity != nil {
-		ago := time.Since(*s.LastActivity).Truncate(time.Second)
-		infoParts = append(infoParts, fmt.Sprintf("\u23f1 %s", ago))
+		ago := time.Since(*s.LastActivity)
+		infoParts = append(infoParts, fmt.Sprintf("\u23f1 %s", formatAge(ago)))
 	}
 	headerLines = append(headerLines, "  "+lipgloss.NewStyle().Foreground(colorDimFg).
 		Render(strings.Join(infoParts, "  ")))
@@ -95,8 +104,14 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	if len(s.Activities) > 0 {
 		bodyLines = append(bodyLines, styleSectionLabel.Render("\u2500\u2500 Activities"))
 		start := 0
+		overflow := 0
 		if len(s.Activities) > 8 {
-			start = len(s.Activities) - 8
+			overflow = len(s.Activities) - 8
+			start = overflow
+		}
+		if overflow > 0 {
+			bodyLines = append(bodyLines, lipgloss.NewStyle().Foreground(colorSubtle).
+				Render(fmt.Sprintf("  … +%d more", overflow)))
 		}
 		visible := s.Activities[start:]
 		total := len(visible)
@@ -249,6 +264,30 @@ func toolDetail(pt client.PendingTool, maxLen int) string {
 		}
 	}
 	return ""
+}
+
+// formatAge formats a duration as a compact human-readable string.
+func formatAge(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	if h < 24 {
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	days := h / 24
+	rem := h % 24
+	if rem == 0 {
+		return fmt.Sprintf("%dd", days)
+	}
+	return fmt.Sprintf("%dd %dh", days, rem)
 }
 
 func safetyMarker(safety string) string {

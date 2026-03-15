@@ -83,6 +83,9 @@ func renderHelp(width, height int) string {
 
 	bindings := []struct{ key, desc string }{
 		{"\u2190 / \u2192", "Navigate between sessions"},
+		{"\u2191 / \u2193", "Scroll detail panel"},
+		{"Home / End", "Jump to first / last session"},
+		{"PgUp / PgDn", "Scroll 5 lines at a time"},
 		{"Enter", "Focus (switch to) the selected session's Ghostty tab"},
 		{"a", "Toggle autopilot for the selected session"},
 		{"y", "Approve the pending tool call"},
