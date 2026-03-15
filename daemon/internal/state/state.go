@@ -175,11 +175,12 @@ func (m *Manager) SetSlug(sid, slug string) {
 }
 
 // SetGhosttyTab enriches a session with Ghostty tab info.
-func (m *Manager) SetGhosttyTab(sid, tabName string) {
+func (m *Manager) SetGhosttyTab(sid, tabName string, tabIndex int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.sessions[sid]; ok {
 		s.GhosttyTab = tabName
+		s.GhosttyTabIndex = tabIndex
 	}
 }
 

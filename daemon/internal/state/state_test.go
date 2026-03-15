@@ -499,18 +499,21 @@ func TestSetSlugNonexistentSession(t *testing.T) {
 func TestSetGhosttyTab(t *testing.T) {
 	m := newTestManager()
 	m.RegisterSession("s1", "/path", "default")
-	m.SetGhosttyTab("s1", "Terminal 1")
+	m.SetGhosttyTab("s1", "Terminal 1", 1)
 
 	sessions := m.GetSessions()
 	if sessions[0].GhosttyTab != "Terminal 1" {
 		t.Errorf("ghostty_tab = %q, want Terminal 1", sessions[0].GhosttyTab)
+	}
+	if sessions[0].GhosttyTabIndex != 1 {
+		t.Errorf("ghostty_tab_index = %d, want 1", sessions[0].GhosttyTabIndex)
 	}
 }
 
 func TestSetGhosttyTabNonexistent(t *testing.T) {
 	m := newTestManager()
 	// Should not panic.
-	m.SetGhosttyTab("nonexistent", "tab")
+	m.SetGhosttyTab("nonexistent", "tab", 1)
 }
 
 // --- Subscriber notifications ---
