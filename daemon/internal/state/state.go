@@ -66,6 +66,23 @@ func New() *Manager {
 	return m
 }
 
+// NewWithDir creates a Manager that persists autopilot state in the given
+// directory. Useful for tests that need isolation from the global state.
+func NewWithDir(dir string) *Manager {
+	m := &Manager{
+		sessions:  make(map[string]*model.Session),
+		autopilot: make(map[string]string),
+		pending:   make(map[string]*model.PendingApproval),
+		cooldowns: make(map[string]time.Time),
+	}
+	if dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+		m.autopilotPath = filepath.Join(dir, "autopilot.json")
+		m.loadAutopilot()
+	}
+	return m
+}
+
 // RegisterSession adds or updates a session from a SessionStart hook.
 func (m *Manager) RegisterSession(sid, cwd, permMode string) {
 	m.mu.Lock()
