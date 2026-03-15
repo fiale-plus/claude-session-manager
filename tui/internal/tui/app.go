@@ -361,17 +361,9 @@ func (m Model) View() string {
 	// Main content area.
 	mainContent := ""
 	if m.queueVisible && hasPending {
-		queueHeight := remainingHeight - 2
-		if queueHeight < 6 {
-			queueHeight = 6
-		}
-		mainContent = renderQueue(m.sessions, w, queueHeight)
+		mainContent = renderQueue(m.sessions, w, remainingHeight)
 	} else if sel := m.selected(); sel != nil {
-		zoomHeight := remainingHeight - 2
-		if zoomHeight < 4 {
-			zoomHeight = 4
-		}
-		mainContent = renderZoom(*sel, w, zoomHeight)
+		mainContent = renderZoom(*sel, w, remainingHeight)
 	} else {
 		mainContent = renderEmptyState(w, remainingHeight)
 	}

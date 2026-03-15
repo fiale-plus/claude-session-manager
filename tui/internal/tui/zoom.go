@@ -9,76 +9,107 @@ import (
 	"github.com/pchaganti/claude-session-manager/tui/internal/client"
 )
 
-// renderZoom renders the expanded session detail panel.
+// renderZoom renders the session detail panel, hard-clipped to height.
+// Layout: fixed header (4-5 lines) + scrollable body (activities, pending, last output).
 func renderZoom(s client.Session, width, height int) string {
 	if width < 10 || height < 4 {
 		return ""
 	}
 
-	innerWidth := width - 6 // account for padding + border
+	innerWidth := width - 4 // padding only, no border
 
-	// ── Header: project + state badge + branch ──────────────────
+	// ── Build all lines, then clip to height ──────────────────
+
+	var lines []string
+
+	// Header: name + state badge + branch (always visible)
 	stateStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.ANSIColor(0)).
 		Background(stateColor(s.State)).
 		Bold(true).
 		Padding(0, 1)
 
-	header := styleZoomHeader.Render(s.ProjectName) +
+	headerLine := styleZoomHeader.Render(pillName(s)) +
 		" " + stateStyle.Render(stateLabel(s.State))
-
 	if s.GitBranch != "" {
-		branchPill := lipgloss.NewStyle().
-			Foreground(colorAccent).
-			Render("\ue0a0 " + s.GitBranch) // git branch icon
-		header += "  " + branchPill
+		headerLine += "  " + lipgloss.NewStyle().Foreground(colorAccent).
+			Render("\ue0a0 "+s.GitBranch)
 	}
+	lines = append(lines, headerLine)
 
-	// ── Autopilot indicator ─────────────────────────────────────
-	autopilotLine := ""
+	// Autopilot badge
 	if s.Autopilot {
 		apStyle := styleAutopilotOn
 		if s.HasDestructive {
 			apStyle = styleAutopilotWarn
 		}
-		autopilotLine = apStyle.Render("\u2699 AUTOPILOT")
+		apLine := apStyle.Render("\u2699 AUTOPILOT")
 		if s.HasDestructive {
-			autopilotLine += "  " + styleDestructive.Render("\u26a0 destructive pending")
+			apLine += "  " + styleDestructive.Render("\u26a0 destructive pending")
 		}
+		lines = append(lines, apLine)
 	}
 
-	// ── PID + CWD ───────────────────────────────────────────────
-	pidStr := lipgloss.NewStyle().Foreground(colorDimFg).Render(
+	// PID + CWD + last activity on one line
+	infoLine := lipgloss.NewStyle().Foreground(colorDimFg).Render(
 		fmt.Sprintf("PID %d", s.PID))
-	cwdStr := lipgloss.NewStyle().Foreground(colorSubtle).Render(
-		truncateMiddle(s.CWD, innerWidth-12))
-	info := pidStr + "  " + cwdStr
-
-	// ── Last activity ───────────────────────────────────────────
-	lastActivityStr := ""
+	infoLine += "  " + lipgloss.NewStyle().Foreground(colorSubtle).Render(
+		truncateMiddle(s.CWD, innerWidth-20))
 	if s.LastActivity != nil {
 		ago := time.Since(*s.LastActivity).Truncate(time.Second)
-		lastActivityStr = lipgloss.NewStyle().
-			Foreground(colorDimFg).
-			Render(fmt.Sprintf("\u23f1 %s ago", ago)) // stopwatch icon
+		infoLine += "  " + lipgloss.NewStyle().Foreground(colorDimFg).Render(
+			fmt.Sprintf("\u23f1 %s ago", ago))
+	}
+	lines = append(lines, infoLine)
+
+	// Thin separator
+	sep := lipgloss.NewStyle().Foreground(colorBorder).
+		Render(strings.Repeat("\u2500", min(innerWidth, 60)))
+
+	// ── Pending approval (priority — always show if present) ──
+	if len(s.PendingTools) > 0 {
+		lines = append(lines, sep)
+		countBadge := lipgloss.NewStyle().
+			Foreground(lipgloss.ANSIColor(15)).
+			Background(colorOrange).
+			Bold(true).
+			Padding(0, 1).
+			Render(fmt.Sprintf("%d", len(s.PendingTools)))
+		lines = append(lines,
+			styleSectionLabel.Foreground(colorOrange).
+				Render("\u2500\u2500 Pending Approval")+" "+countBadge)
+		for _, pt := range s.PendingTools {
+			marker := safetyMarker(pt.Safety)
+			detail := toolDetail(pt, innerWidth-20)
+			toolLabel := pt.ToolName
+			if detail != "" {
+				toolLabel += ": " + detail
+			}
+			lines = append(lines, fmt.Sprintf("  %s %s", marker,
+				lipgloss.NewStyle().Foreground(colorFg).Bold(true).Render(toolLabel)))
+		}
 	}
 
-	// ── Activities timeline (last 6) ────────────────────────────
-	activityBlock := ""
+	// ── Activities (clip to fit) ─────────────────────────────
 	if len(s.Activities) > 0 {
-		start := 0
-		if len(s.Activities) > 6 {
-			start = len(s.Activities) - 6
-		}
+		lines = append(lines, sep)
+		lines = append(lines, styleSectionLabel.Render("\u2500\u2500 Activities"))
 
-		var activityLines []string
+		// Show as many as fit — newest first priority
+		start := 0
+		maxActivities := height - len(lines) - 4 // leave room for last output
+		if maxActivities < 2 {
+			maxActivities = 2
+		}
+		if len(s.Activities) > maxActivities {
+			start = len(s.Activities) - maxActivities
+		}
 		visible := s.Activities[start:]
 		total := len(visible)
 		for idx, a := range visible {
-			// Progressive fade: newest entries bright, older ones dim.
-			age := total - 1 - idx // 0 = newest
-			tsColor := colorSubtle
-			sumColor := colorDimFg
+			age := total - 1 - idx
+			tsColor := lipgloss.TerminalColor(colorSubtle)
+			sumColor := lipgloss.TerminalColor(colorDimFg)
 			if age >= 4 {
 				tsColor = colorBorder
 				sumColor = colorBorder
@@ -86,102 +117,52 @@ func renderZoom(s client.Session, width, height int) string {
 				tsColor = colorBorder
 				sumColor = colorSubtle
 			}
-
-			ts := lipgloss.NewStyle().
-				Foreground(tsColor).
+			ts := lipgloss.NewStyle().Foreground(tsColor).
 				Render(a.Timestamp.Format("15:04:05"))
-			icon := activityIcon(a.ActivityType)
-			iconStyled := lipgloss.NewStyle().
-				Foreground(activityColor(a.ActivityType)).
-				Render(icon)
-			summary := lipgloss.NewStyle().
-				Foreground(sumColor).
+			icon := lipgloss.NewStyle().Foreground(activityColor(a.ActivityType)).
+				Render(activityIcon(a.ActivityType))
+			summary := lipgloss.NewStyle().Foreground(sumColor).
 				Render(truncateMiddle(a.Summary, innerWidth-20))
-			activityLines = append(activityLines,
-				fmt.Sprintf("  %s  %s  %s", ts, iconStyled, summary))
+			lines = append(lines, fmt.Sprintf("  %s  %s  %s", ts, icon, summary))
 		}
-
-		activityBlock = styleSectionLabel.Render("\u2500\u2500 Activities") + "\n" +
-			strings.Join(activityLines, "\n")
 	}
 
-	// ── Pending approval ────────────────────────────────────────
-	pendingBlock := ""
-	if len(s.PendingTools) > 0 {
-		var lines []string
-		for _, pt := range s.PendingTools {
-			marker := safetyMarker(pt.Safety)
-			toolStyle := lipgloss.NewStyle().Foreground(colorFg).Bold(true)
-			detail := toolDetail(pt, innerWidth-20)
-			toolLabel := pt.ToolName
-			if detail != "" {
-				toolLabel += ": " + detail
-			}
-			lines = append(lines,
-				fmt.Sprintf("  %s %s", marker, toolStyle.Render(toolLabel)))
-		}
-		countBadge := lipgloss.NewStyle().
-			Foreground(lipgloss.ANSIColor(15)).
-			Background(colorOrange).
-			Bold(true).
-			Padding(0, 1).
-			Render(fmt.Sprintf("%d", len(s.PendingTools)))
-		pendingBlock = styleSectionLabel.
-			Foreground(colorOrange).
-			Render("\u2500\u2500 Pending Approval") +
-			" " + countBadge + "\n" +
-			strings.Join(lines, "\n")
-	}
-
-	// ── Motivation (last assistant text) ────────────────────────
-	motivationBlock := ""
+	// ── Last Output (fill remaining space) ───────────────────
 	if s.LastText != "" {
-		text := s.LastText
-		maxChars := innerWidth * 3
-		if len(text) > maxChars {
-			text = text[:maxChars] + "\u2026"
+		remaining := height - len(lines) - 1
+		if remaining >= 2 {
+			lines = append(lines, sep)
+			lines = append(lines, styleSectionLabel.Render("\u2500\u2500 Last Output"))
+			remaining -= 2
+
+			text := s.LastText
+			// Wrap to width, then clip to remaining lines
+			wrapped := lipgloss.NewStyle().Width(innerWidth).Render("  \u201c" + text + "\u201d")
+			wrappedLines := strings.Split(wrapped, "\n")
+			if len(wrappedLines) > remaining {
+				wrappedLines = wrappedLines[:remaining]
+				// Add ellipsis to last line
+				if len(wrappedLines) > 0 {
+					wrappedLines[len(wrappedLines)-1] += "\u2026"
+				}
+			}
+			for _, wl := range wrappedLines {
+				lines = append(lines, styleMotivation.Render(wl))
+			}
 		}
-		motivationBlock = styleSectionLabel.Render("\u2500\u2500 Last Output") + "\n" +
-			styleMotivation.Width(innerWidth).Render("  \u201c"+text+"\u201d")
 	}
 
-	// ── Separator line ──────────────────────────────────────────
-	sep := lipgloss.NewStyle().Foreground(colorBorder).
-		Render(strings.Repeat("\u2500", min(innerWidth, 60)))
-
-	// ── Assemble sections ───────────────────────────────────────
-	sections := []string{header}
-	if autopilotLine != "" {
-		sections = append(sections, autopilotLine)
-	}
-	sections = append(sections, info)
-	if lastActivityStr != "" {
-		sections = append(sections, lastActivityStr)
-	}
-	if activityBlock != "" {
-		sections = append(sections, sep, activityBlock)
-	}
-	if pendingBlock != "" {
-		sections = append(sections, sep, pendingBlock)
-	}
-	if motivationBlock != "" {
-		sections = append(sections, sep, motivationBlock)
+	// ── Hard clip to height ─────────────────────────────────
+	if len(lines) > height {
+		lines = lines[:height]
 	}
 
-	body := strings.Join(sections, "\n")
+	body := strings.Join(lines, "\n")
 
-	// Dynamic border color based on state.
-	borderColor := stateColor(s.State)
-	if len(s.PendingTools) > 0 {
-		borderColor = colorOrange
-	}
-
+	// No heavy border — just padding and width constraint.
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(1, 2).
-		Background(colorPanelBg).
-		Width(width - 2).
+		Padding(0, 2).
+		Width(width).
 		Height(height).
 		Render(body)
 }
@@ -203,7 +184,6 @@ func activityIcon(actType string) string {
 	}
 }
 
-// activityColor returns a color for activity type icons.
 func activityColor(actType string) lipgloss.TerminalColor {
 	switch actType {
 	case "tool_use":
@@ -221,12 +201,10 @@ func activityColor(actType string) lipgloss.TerminalColor {
 	}
 }
 
-// toolDetail extracts a human-readable summary from a pending tool's input.
 func toolDetail(pt client.PendingTool, maxLen int) string {
 	if pt.ToolInput == nil {
 		return ""
 	}
-	// Try well-known keys in order of usefulness.
 	for _, key := range []string{"command", "file_path", "pattern", "query", "description", "prompt"} {
 		if v, ok := pt.ToolInput[key]; ok {
 			s := fmt.Sprintf("%v", v)
@@ -242,10 +220,10 @@ func toolDetail(pt client.PendingTool, maxLen int) string {
 func safetyMarker(safety string) string {
 	switch safety {
 	case "safe":
-		return styleSafe.Render("\u2713") // checkmark
+		return styleSafe.Render("\u2713")
 	case "destructive":
-		return styleDestructive.Render("\u26a0") // warning
+		return styleDestructive.Render("\u26a0")
 	default:
-		return styleUnknown.Render("\u2022") // bullet
+		return styleUnknown.Render("\u2022")
 	}
 }
