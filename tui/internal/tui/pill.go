@@ -85,7 +85,7 @@ func renderPill(s client.Session, selected bool, glowPos int) string {
 	dimBg := stateColorDim(s.State)
 	icon := stateIcon(s.State)
 
-	name := pillName(s)
+	name := truncateMiddle(pillName(s), 25)
 
 	label := icon + " " + name
 
@@ -105,20 +105,12 @@ func renderPill(s client.Session, selected bool, glowPos int) string {
 		Background(dimBg)
 
 	if selected {
-		accentColor := colorAccent
-		if s.AutopilotMode == "yolo" {
-			accentColor = colorOrange
-		} else if s.AutopilotMode == "on" {
-			accentColor = colorRunning
-		}
 		style = style.
 			Bold(true).
 			Foreground(lipgloss.ANSIColor(15)).
 			Background(sc).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(accentColor)
+			Underline(true)
 	}
-	// Unselected pills: no border at all.
 
 	return style.Render(label)
 }

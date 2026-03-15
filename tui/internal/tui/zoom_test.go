@@ -86,6 +86,90 @@ func TestRenderZoom_WithPendingTools(t *testing.T) {
 	}
 }
 
+// === Iteration 6: Human-readable relative time ===
+
+func TestFormatAge(t *testing.T) {
+	tests := []struct {
+		dur  time.Duration
+		want string
+	}{
+		{3 * time.Second, "3s"},
+		{45 * time.Second, "45s"},
+		{90 * time.Second, "1m"},
+		{5 * time.Minute, "5m"},
+		{65 * time.Minute, "1h 5m"},
+		{2 * time.Hour, "2h"},
+		{26 * time.Hour, "1d 2h"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := formatAge(tt.dur)
+			if got != tt.want {
+				t.Errorf("formatAge(%v) = %q, want %q", tt.dur, got, tt.want)
+			}
+		})
+	}
+}
+
+// === Iteration 7: Activity overflow indicator ===
+
+func TestRenderZoom_ManyActivities_ShowsOverflow(t *testing.T) {
+	s := testSession()
+	now := time.Now()
+	// Add 15 activities — only 8 should be shown, with overflow indicator.
+	s.Activities = nil
+	for i := 0; i < 15; i++ {
+		s.Activities = append(s.Activities, client.Activity{
+			Timestamp:    now.Add(-time.Duration(15-i) * time.Minute),
+			ActivityType: "tool_use",
+			Summary:      "Action " + itoa(i),
+		})
+	}
+
+	out := renderZoom(s, 100, 30, 0)
+	// Should indicate there are older activities not shown.
+	if !strings.Contains(out, "+") || !strings.Contains(out, "more") {
+		t.Error("15 activities should show overflow indicator like '+7 more'")
+	}
+}
+
+// === Iteration 8: Zoom at minimum height ===
+
+func TestRenderZoom_MinimumHeight(t *testing.T) {
+	s := testSession()
+	// Height=4 is the minimum — should not panic or produce empty output.
+	out := renderZoom(s, 80, 4, 0)
+	if out == "" {
+		t.Error("renderZoom at height=4 should produce output")
+	}
+	lines := strings.Split(out, "\n")
+	if len(lines) > 4 {
+		t.Errorf("renderZoom at height=4 produced %d lines", len(lines))
+	}
+}
+
+// === Iteration 9: Scroll clamping ===
+
+func TestRenderZoom_ScrollClamp(t *testing.T) {
+	s := testSession()
+	// Scroll offset way beyond content should not panic.
+	out := renderZoom(s, 80, 20, 9999)
+	if out == "" {
+		t.Error("renderZoom with huge scroll offset should produce output")
+	}
+}
+
+// === Iteration 10: Permission mode display ===
+
+func TestRenderZoom_ShowsPermissionMode(t *testing.T) {
+	s := testSession()
+	s.PermissionMode = "plan"
+	out := renderZoom(s, 100, 20, 0)
+	if !strings.Contains(out, "PLAN") {
+		t.Error("session with permission_mode=plan should show PLAN badge")
+	}
+}
+
 // TestFullView_NeverExceedsTerminalHeight is the integration-level regression:
 // the full View() output must never exceed m.height.
 func TestFullView_NeverExceedsTerminalHeight(t *testing.T) {

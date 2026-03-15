@@ -254,6 +254,33 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.scrollOffset++
 		return m, nil
 
+	case "home":
+		m.selectedIdx = 0
+		m.scrollOffset = 0
+		if len(m.sessions) > 0 {
+			m.selectedSID = m.sessions[0].SessionID
+		}
+		return m, nil
+
+	case "end":
+		if len(m.sessions) > 0 {
+			m.selectedIdx = len(m.sessions) - 1
+			m.scrollOffset = 0
+			m.selectedSID = m.sessions[m.selectedIdx].SessionID
+		}
+		return m, nil
+
+	case "pgup":
+		m.scrollOffset -= 5
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
+		}
+		return m, nil
+
+	case "pgdown":
+		m.scrollOffset += 5
+		return m, nil
+
 	case "h":
 		m.helpVisible = !m.helpVisible
 		return m, nil
