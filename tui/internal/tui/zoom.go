@@ -18,11 +18,11 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	innerWidth := width - 4
 
 	// ═══════════════════════════════════════════════════════════
-	// FIXED HEADER — always visible, pinned below status bar
+	// FIXED HEADER — 2 lines, always visible
 	// ═══════════════════════════════════════════════════════════
 	var headerLines []string
 
-	// Line 1: name + state badge + branch
+	// Line 1: name  STATE  [AUTOPILOT|YOLO]  ▸ branch
 	stateStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.ANSIColor(0)).
 		Background(stateColor(s.State)).
@@ -31,35 +31,30 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 
 	line1 := "  " + styleZoomHeader.Render(pillName(s)) +
 		" " + stateStyle.Render(stateLabel(s.State))
+
+	switch s.AutopilotMode {
+	case "on":
+		line1 += " " + styleAutopilotOn.Render("\u2699 AUTO")
+	case "yolo":
+		line1 += " " + styleAutopilotWarn.Render("\u26a0 YOLO")
+	}
+
 	if s.GitBranch != "" {
 		line1 += "  " + lipgloss.NewStyle().Foreground(colorAccent).
 			Render("\ue0a0 "+s.GitBranch)
 	}
 	headerLines = append(headerLines, line1)
 
-	// Line 2: autopilot badge
-	switch s.AutopilotMode {
-	case "on":
-		headerLines = append(headerLines, "   "+styleAutopilotOn.Render("\u2699 AUTOPILOT"))
-	case "yolo":
-		apLine := "   " + styleAutopilotWarn.Render("\u26a0 YOLO")
-		if s.HasDestructive {
-			apLine += "  " + styleDestructive.Render("destructive pending!")
-		}
-		headerLines = append(headerLines, apLine)
-	}
-
-	// Line 3: PID + CWD + last activity
-	infoLine := "  " + lipgloss.NewStyle().Foreground(colorDimFg).Render(
-		fmt.Sprintf("PID %d", s.PID))
-	infoLine += "  " + lipgloss.NewStyle().Foreground(colorSubtle).Render(
-		truncateMiddle(s.CWD, innerWidth-30))
+	// Line 2: PID  cwd  ⏱ ago
+	var infoParts []string
+	infoParts = append(infoParts, fmt.Sprintf("PID %d", s.PID))
+	infoParts = append(infoParts, truncateMiddle(s.CWD, innerWidth-35))
 	if s.LastActivity != nil {
 		ago := time.Since(*s.LastActivity).Truncate(time.Second)
-		infoLine += "  " + lipgloss.NewStyle().Foreground(colorDimFg).Render(
-			fmt.Sprintf("\u23f1 %s ago", ago))
+		infoParts = append(infoParts, fmt.Sprintf("\u23f1 %s", ago))
 	}
-	headerLines = append(headerLines, infoLine)
+	headerLines = append(headerLines, "  "+lipgloss.NewStyle().Foreground(colorDimFg).
+		Render(strings.Join(infoParts, "  ")))
 
 	headerHeight := len(headerLines)
 	bodyHeight := height - headerHeight

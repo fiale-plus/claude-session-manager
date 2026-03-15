@@ -143,6 +143,8 @@ func splitLines(data []byte) [][]byte {
 }
 
 // DetectState determines session state from JSONL entries.
+// Conservative: only RUNNING if the last entry is clearly mid-tool-execution.
+// Avoids false positives from truncated tail windows.
 func DetectState(entries []jsonlEntry) model.SessionState {
 	meaningful := filterMeaningful(entries)
 	if len(meaningful) == 0 {
@@ -151,59 +153,41 @@ func DetectState(entries []jsonlEntry) model.SessionState {
 
 	last := meaningful[len(meaningful)-1]
 
-	// System entries that indicate the turn ended → waiting.
+	// System entries → turn ended, session waiting.
 	if last.Type == "system" {
-		switch last.Subtype {
-		case "turn_duration", "stop_hook_summary", "local_command":
-			return model.StateWaiting
-		}
+		return model.StateWaiting
 	}
 
-	// Non-standard entry types at the end (custom-title, agent-name, etc.)
-	// mean the session is idle, not running.
-	if last.Type != "user" && last.Type != "assistant" && last.Type != "system" {
-		return model.StateIdle
+	// Assistant with tool_use as the very last entry → RUNNING (tool executing).
+	// Only check the LAST entry to avoid false positives from stale tool_use
+	// blocks deeper in the tail window.
+	if last.Type == "assistant" && hasToolUse(last) {
+		// Verify no tool_result follows (there shouldn't be, it's the last entry).
+		return model.StateRunning
 	}
 
-	// Walk backward looking for pending tool_use.
-	for i := len(meaningful) - 1; i >= 0; i-- {
-		entry := meaningful[i]
+	// Assistant text (no tool_use) as last entry → finished, waiting.
+	if last.Type == "assistant" {
+		return model.StateWaiting
+	}
 
-		if entry.Type == "assistant" && hasToolUse(entry) {
-			toolIDs := getToolUseIDs(entry)
-			hasResult := false
-			for _, later := range meaningful[i+1:] {
-				if isToolResult(later) {
-					for _, id := range getToolResultIDs(later) {
-						if _, ok := toolIDs[id]; ok {
-							hasResult = true
-							break
-						}
-					}
-				}
-				if hasResult {
-					break
-				}
-			}
-			if !hasResult {
+	// User message as last entry → could be waiting for CC to respond,
+	// but also could be a /command that doesn't trigger a response.
+	// Check the second-to-last: if it's system (turn ended), this user
+	// message is a new prompt → RUNNING. Otherwise → WAITING.
+	if last.Type == "user" && !isToolResult(last) {
+		if len(meaningful) >= 2 {
+			prev := meaningful[len(meaningful)-2]
+			if prev.Type == "system" {
 				return model.StateRunning
 			}
-			continue
 		}
+		return model.StateWaiting
+	}
 
-		if entry.Type == "user" && !isToolResult(entry) {
-			if i == len(meaningful)-1 {
-				return model.StateRunning
-			}
-			break
-		}
-
-		if entry.Type == "assistant" {
-			if i == len(meaningful)-1 {
-				return model.StateWaiting
-			}
-			break
-		}
+	// Tool result as last entry → tool completed, CC processing → RUNNING.
+	if last.Type == "user" && isToolResult(last) {
+		return model.StateRunning
 	}
 
 	return model.StateIdle
