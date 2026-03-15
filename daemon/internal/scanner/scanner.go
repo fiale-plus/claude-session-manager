@@ -34,17 +34,29 @@ func (s *Scanner) Discover() []*model.Session {
 
 	// Phase 1: Running processes.
 	procs := findClaudeProcesses()
-	cwdToPID := make(map[string]int)
+	cwdToPID := make(map[string]procInfo)
 	for _, p := range procs {
-		if existing, ok := cwdToPID[p.cwd]; !ok || p.pid > existing {
-			cwdToPID[p.cwd] = p.pid
+		if existing, ok := cwdToPID[p.cwd]; !ok || p.pid > existing.pid {
+			cwdToPID[p.cwd] = p
 		}
 	}
 
-	for cwd, pid := range cwdToPID {
-		encoded := encodeProjectPath(cwd)
-		projectDir := filepath.Join(s.claudeProjectsDir, encoded)
-		jsonlPath := findLatestJSONL(projectDir)
+	for cwd, proc := range cwdToPID {
+		var jsonlPath string
+		// If we have a session ID from --resume, try to match to a specific JSONL file.
+		if proc.sessionID != "" {
+			encoded := encodeProjectPath(cwd)
+			projectDir := filepath.Join(s.claudeProjectsDir, encoded)
+			candidate := filepath.Join(projectDir, proc.sessionID+".jsonl")
+			if _, err := os.Stat(candidate); err == nil {
+				jsonlPath = candidate
+			}
+		}
+		if jsonlPath == "" {
+			encoded := encodeProjectPath(cwd)
+			projectDir := filepath.Join(s.claudeProjectsDir, encoded)
+			jsonlPath = findLatestJSONL(projectDir)
+		}
 		if jsonlPath == "" {
 			continue
 		}
@@ -52,7 +64,7 @@ func (s *Scanner) Discover() []*model.Session {
 			continue
 		}
 
-		session := sessionFromJSONL(jsonlPath, pid)
+		session := sessionFromJSONL(jsonlPath, proc.pid, proc.tty)
 		if session == nil {
 			continue
 		}
@@ -77,7 +89,7 @@ func (s *Scanner) Discover() []*model.Session {
 			if err != nil || info.ModTime().Before(cutoff) {
 				continue
 			}
-			session := sessionFromJSONL(jsonlPath, 0)
+			session := sessionFromJSONL(jsonlPath, 0, "")
 			if session == nil {
 				continue
 			}
@@ -89,53 +101,96 @@ func (s *Scanner) Discover() []*model.Session {
 }
 
 type procInfo struct {
-	pid int
-	cwd string
+	pid       int
+	cwd       string
+	sessionID string
+	tty       string
+}
+
+// isClaudeCLI returns true if cmd looks like the actual `claude` CLI binary,
+// excluding Claude.app, csm-daemon, and claude-session-manager.
+func isClaudeCLI(cmd string) bool {
+	base := filepath.Base(cmd)
+	if base != "claude" {
+		return false
+	}
+	if strings.Contains(cmd, "Claude.app") {
+		return false
+	}
+	if strings.Contains(cmd, "csm-daemon") || strings.Contains(cmd, "claude-session-manager") {
+		return false
+	}
+	return true
 }
 
 func findClaudeProcesses() []procInfo {
-	// Use ps to find Claude CLI processes (avoids cgo dependency on process libs).
-	out, err := exec.Command("ps", "-eo", "pid,command").Output()
+	// Use ps to find Claude CLI processes with TTY info.
+	out, err := exec.Command("ps", "-eo", "pid,tty,args").Output()
 	if err != nil {
 		return nil
 	}
 
-	var candidates []int
+	type candidate struct {
+		pid       int
+		tty       string
+		sessionID string
+	}
+	var candidates []candidate
+
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		if !strings.Contains(strings.ToLower(line), "claude") {
-			continue
-		}
-		if strings.Contains(line, "claude-session-manager") || strings.Contains(line, "csm-daemon") {
+		// Format: "  PID TTY      COMMAND..."
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
 			continue
 		}
 		var pid int
-		if _, err := fmt.Sscanf(line, "%d", &pid); err != nil {
+		if _, err := fmt.Sscanf(fields[0], "%d", &pid); err != nil {
 			continue
 		}
-		candidates = append(candidates, pid)
+		tty := fields[1] // e.g. "ttys003" or "??"
+		if tty == "??" {
+			tty = ""
+		}
+		// The command starts at fields[2].
+		if !isClaudeCLI(fields[2]) {
+			continue
+		}
+		// Extract session ID from --resume flag.
+		var sid string
+		for i, arg := range fields[2:] {
+			if arg == "--resume" && i+1 < len(fields[2:]) {
+				sid = fields[2:][i+1]
+				break
+			}
+			if strings.HasPrefix(arg, "--resume=") {
+				sid = strings.TrimPrefix(arg, "--resume=")
+				break
+			}
+		}
+		candidates = append(candidates, candidate{pid: pid, tty: tty, sessionID: sid})
 	}
 
 	var result []procInfo
-	for _, pid := range candidates {
-		cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+	for _, c := range candidates {
+		cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", c.pid))
 		if err != nil {
-			// macOS: use lsof -p <pid> -Fn to get cwd.
-			cwd = getCWDMacOS(pid)
+			// macOS: use lsof with -a flag to AND filters.
+			cwd = getCWDMacOS(c.pid)
 		}
 		if cwd == "" {
 			continue
 		}
-		result = append(result, procInfo{pid: pid, cwd: cwd})
+		result = append(result, procInfo{pid: c.pid, cwd: cwd, sessionID: c.sessionID, tty: c.tty})
 	}
 	return result
 }
 
 func getCWDMacOS(pid int) string {
-	out, err := exec.Command("lsof", "-p", fmt.Sprintf("%d", pid), "-Fn", "-d", "cwd").Output()
+	out, err := exec.Command("lsof", "-a", "-d", "cwd", "-p", fmt.Sprintf("%d", pid), "-Fn").Output()
 	if err != nil {
 		return ""
 	}
@@ -153,6 +208,56 @@ func encodeProjectPath(path string) string {
 		return "-"
 	}
 	return strings.ReplaceAll(clean, "/", "-")
+}
+
+// decodeProjectPath attempts to reconstruct a filesystem path from a Claude
+// projects directory name (where / is encoded as -). Each - could be either
+// a path separator or a literal hyphen. We try all possibilities and verify
+// against the filesystem.
+func decodeProjectPath(encoded string) string {
+	if encoded == "-" {
+		return "/"
+	}
+	// Fast path: simple replacement, check if it exists.
+	simple := "/" + strings.ReplaceAll(encoded, "-", "/")
+	if info, err := os.Stat(simple); err == nil && info.IsDir() {
+		return filepath.Base(simple)
+	}
+
+	// Recursive decode: try each - as either / or literal -.
+	parts := strings.Split(encoded, "-")
+	if len(parts) <= 1 {
+		return encoded
+	}
+
+	var best string
+	var tryDecode func(idx int, current string)
+	tryDecode = func(idx int, current string) {
+		if idx >= len(parts) {
+			path := "/" + current
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				if best == "" || len(path) > len(best) {
+					best = path
+				}
+			}
+			return
+		}
+		if idx == 0 {
+			tryDecode(idx+1, parts[0])
+			return
+		}
+		// Try as path separator.
+		tryDecode(idx+1, current+"/"+parts[idx])
+		// Try as literal hyphen.
+		tryDecode(idx+1, current+"-"+parts[idx])
+	}
+	tryDecode(0, "")
+
+	if best != "" {
+		return filepath.Base(best)
+	}
+	// Fallback: last segment after the final -.
+	return parts[len(parts)-1]
 }
 
 func findLatestJSONL(dir string) string {
@@ -180,7 +285,7 @@ func findLatestJSONL(dir string) string {
 	return latest
 }
 
-func sessionFromJSONL(jsonlPath string, pid int) *model.Session {
+func sessionFromJSONL(jsonlPath string, pid int, tty string) *model.Session {
 	entries, err := ReadTail(jsonlPath, 50)
 	if err != nil || len(entries) == 0 {
 		return nil
@@ -195,7 +300,8 @@ func sessionFromJSONL(jsonlPath string, pid int) *model.Session {
 	if cwd != "" {
 		projectName = filepath.Base(cwd)
 	} else {
-		projectName = filepath.Base(filepath.Dir(jsonlPath))
+		dirName := filepath.Base(filepath.Dir(jsonlPath))
+		projectName = decodeProjectPath(dirName)
 	}
 
 	var st model.SessionState
@@ -207,7 +313,11 @@ func sessionFromJSONL(jsonlPath string, pid int) *model.Session {
 
 	activities := ExtractActivities(entries, 8)
 	motivation := ExtractMotivation(entries)
-	pendingTools := ExtractPendingTools(entries)
+
+	// Scanner cannot reliably detect pending tools from JSONL —
+	// an unmatched tool_use could be executing (not blocked on permission).
+	// Only live hooks (PreToolUse) can detect real permission prompts.
+	var pendingTools []model.PendingTool
 
 	var lastActivity *time.Time
 	if len(activities) > 0 {
@@ -226,6 +336,7 @@ func sessionFromJSONL(jsonlPath string, pid int) *model.Session {
 		Activities:   activities,
 		LastText:     motivation,
 		PID:          pid,
+		TTY:          tty,
 		GitBranch:    gitBranch,
 		PendingTools: pendingTools,
 	}

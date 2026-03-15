@@ -143,6 +143,8 @@ func splitLines(data []byte) [][]byte {
 }
 
 // DetectState determines session state from JSONL entries.
+// Conservative: only RUNNING if the last entry is clearly mid-tool-execution.
+// Avoids false positives from truncated tail windows.
 func DetectState(entries []jsonlEntry) model.SessionState {
 	meaningful := filterMeaningful(entries)
 	if len(meaningful) == 0 {
@@ -151,50 +153,41 @@ func DetectState(entries []jsonlEntry) model.SessionState {
 
 	last := meaningful[len(meaningful)-1]
 
-	// System turn_duration or stop_hook_summary → waiting.
-	if last.Type == "system" && (last.Subtype == "turn_duration" || last.Subtype == "stop_hook_summary") {
+	// System entries → turn ended, session waiting.
+	if last.Type == "system" {
 		return model.StateWaiting
 	}
 
-	// Walk backward looking for pending tool_use.
-	for i := len(meaningful) - 1; i >= 0; i-- {
-		entry := meaningful[i]
+	// Assistant with tool_use as the very last entry → RUNNING (tool executing).
+	// Only check the LAST entry to avoid false positives from stale tool_use
+	// blocks deeper in the tail window.
+	if last.Type == "assistant" && hasToolUse(last) {
+		// Verify no tool_result follows (there shouldn't be, it's the last entry).
+		return model.StateRunning
+	}
 
-		if entry.Type == "assistant" && hasToolUse(entry) {
-			toolIDs := getToolUseIDs(entry)
-			hasResult := false
-			for _, later := range meaningful[i+1:] {
-				if isToolResult(later) {
-					for _, id := range getToolResultIDs(later) {
-						if _, ok := toolIDs[id]; ok {
-							hasResult = true
-							break
-						}
-					}
-				}
-				if hasResult {
-					break
-				}
-			}
-			if !hasResult {
+	// Assistant text (no tool_use) as last entry → finished, waiting.
+	if last.Type == "assistant" {
+		return model.StateWaiting
+	}
+
+	// User message as last entry → could be waiting for CC to respond,
+	// but also could be a /command that doesn't trigger a response.
+	// Check the second-to-last: if it's system (turn ended), this user
+	// message is a new prompt → RUNNING. Otherwise → WAITING.
+	if last.Type == "user" && !isToolResult(last) {
+		if len(meaningful) >= 2 {
+			prev := meaningful[len(meaningful)-2]
+			if prev.Type == "system" {
 				return model.StateRunning
 			}
-			continue
 		}
+		return model.StateWaiting
+	}
 
-		if entry.Type == "user" && !isToolResult(entry) {
-			if i == len(meaningful)-1 {
-				return model.StateRunning
-			}
-			break
-		}
-
-		if entry.Type == "assistant" {
-			if i == len(meaningful)-1 {
-				return model.StateWaiting
-			}
-			break
-		}
+	// Tool result as last entry → tool completed, CC processing → RUNNING.
+	if last.Type == "user" && isToolResult(last) {
+		return model.StateRunning
 	}
 
 	return model.StateIdle
@@ -281,22 +274,43 @@ func ExtractActivities(entries []jsonlEntry, n int) []model.Activity {
 	return activities
 }
 
-// ExtractPendingTools finds tool_use blocks without matching tool_results.
+// ExtractPendingTools finds tool_use blocks from the LAST assistant message
+// that don't have matching tool_results after it. Only looks at the final
+// assistant entry to avoid false positives from the tail window.
 func ExtractPendingTools(entries []jsonlEntry) []model.PendingTool {
-	pending := make(map[string]model.PendingTool) // tool_use id → PendingTool
 	meaningful := filterMeaningful(entries)
 
-	for _, entry := range meaningful {
-		if entry.Type == "assistant" {
-			for _, block := range parseContent(entry) {
-				if block.Type == "tool_use" && block.ID != "" {
-					pending[block.ID] = model.PendingTool{
-						ToolName:  block.Name,
-						ToolInput: block.Input,
-					}
-				}
+	// Find the last assistant entry with tool_use blocks.
+	lastAssistantIdx := -1
+	for i := len(meaningful) - 1; i >= 0; i-- {
+		if meaningful[i].Type == "assistant" && hasToolUse(meaningful[i]) {
+			lastAssistantIdx = i
+			break
+		}
+		// If we hit a system entry (turn_duration, stop_hook_summary) before
+		// finding an assistant with tool_use, the turn is done — no pending tools.
+		if meaningful[i].Type == "system" {
+			return nil
+		}
+	}
+	if lastAssistantIdx < 0 {
+		return nil
+	}
+
+	// Collect tool_use IDs from that last assistant message.
+	pending := make(map[string]model.PendingTool)
+	for _, block := range parseContent(meaningful[lastAssistantIdx]) {
+		if block.Type == "tool_use" && block.ID != "" {
+			pending[block.ID] = model.PendingTool{
+				ToolName:  block.Name,
+				ToolInput: block.Input,
 			}
-		} else if entry.Type == "user" && isToolResult(entry) {
+		}
+	}
+
+	// Remove any that have tool_results after them.
+	for _, entry := range meaningful[lastAssistantIdx+1:] {
+		if entry.Type == "user" && isToolResult(entry) {
 			for _, id := range getToolResultIDs(entry) {
 				delete(pending, id)
 			}

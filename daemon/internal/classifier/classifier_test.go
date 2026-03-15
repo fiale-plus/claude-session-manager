@@ -156,6 +156,52 @@ func TestSafePrefixWithDestructivePipe(t *testing.T) {
 	}
 }
 
+func TestCompoundAllSafe(t *testing.T) {
+	cmds := []string{
+		"ls && echo hello",
+		"cd /tmp && git status",
+		"npm test && echo done",
+		"git add . && git commit -m 'msg'",
+		"cat foo | grep bar | sort",
+		"ls; pwd; date",
+	}
+	for _, cmd := range cmds {
+		got := ClassifyTool("Bash", map[string]any{"command": cmd})
+		if got != model.SafetySafe {
+			t.Errorf("compound(%q) = %q, want safe", cmd, got)
+		}
+	}
+}
+
+func TestCompoundWithDestructive(t *testing.T) {
+	cmds := []string{
+		"npm test && git push",
+		"cd /tmp && rm -rf /",
+		"echo yes | kill 1234",
+		"ls; git push --force",
+		"cat foo || npm publish",
+	}
+	for _, cmd := range cmds {
+		got := ClassifyTool("Bash", map[string]any{"command": cmd})
+		if got != model.SafetyDestructive {
+			t.Errorf("compound(%q) = %q, want destructive", cmd, got)
+		}
+	}
+}
+
+func TestCompoundWithUnknown(t *testing.T) {
+	cmds := []string{
+		"ls && some-unknown-script",
+		"cd /tmp && docker run ubuntu",
+	}
+	for _, cmd := range cmds {
+		got := ClassifyTool("Bash", map[string]any{"command": cmd})
+		if got != model.SafetyUnknown {
+			t.Errorf("compound(%q) = %q, want unknown", cmd, got)
+		}
+	}
+}
+
 func TestClassifyPendingTools(t *testing.T) {
 	pending := []model.PendingTool{
 		{ToolName: "Read", ToolInput: map[string]any{"file_path": "/a.py"}},

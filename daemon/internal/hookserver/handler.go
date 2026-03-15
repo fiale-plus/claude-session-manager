@@ -2,6 +2,7 @@ package hookserver
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"log"
 	"net"
@@ -16,6 +17,7 @@ import (
 type hookRequest struct {
 	HookEventName  string         `json:"hook_event_name"`
 	SessionID      string         `json:"session_id"`
+	Slug           string         `json:"slug"`
 	CWD            string         `json:"cwd"`
 	ToolName       string         `json:"tool_name"`
 	ToolInput      map[string]any `json:"tool_input"`
@@ -28,7 +30,8 @@ type hookResponse struct {
 }
 
 type hookOutput struct {
-	Decision string `json:"permissionDecision,omitempty"`
+	HookEventName string `json:"hookEventName,omitempty"`
+	Decision      string `json:"permissionDecision,omitempty"`
 }
 
 // Handler processes individual hook connections.
@@ -47,13 +50,16 @@ func (h *Handler) Handle(conn net.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	if !scanner.Scan() {
 		return
 	}
 
+	raw := bytes.TrimSpace(scanner.Bytes())
+
 	var req hookRequest
-	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-		log.Printf("hook: invalid JSON: %v", err)
+	if err := json.Unmarshal(raw, &req); err != nil {
+		log.Printf("hook: invalid JSON: %v (raw: %.200s)", err, string(raw))
 		writeJSON(conn, hookResponse{})
 		return
 	}
@@ -74,8 +80,11 @@ func (h *Handler) Handle(conn net.Conn) {
 }
 
 func (h *Handler) handleSessionStart(req hookRequest) {
-	log.Printf("hook: SessionStart session=%s cwd=%s", req.SessionID, req.CWD)
+	log.Printf("hook: SessionStart session=%s slug=%s cwd=%s", req.SessionID, req.Slug, req.CWD)
 	h.state.RegisterSession(req.SessionID, req.CWD, req.PermissionMode)
+	if req.Slug != "" {
+		h.state.SetSlug(req.SessionID, req.Slug)
+	}
 }
 
 func (h *Handler) handleSessionEnd(req hookRequest) {
@@ -85,6 +94,10 @@ func (h *Handler) handleSessionEnd(req hookRequest) {
 
 func (h *Handler) handlePreToolUse(req hookRequest) hookResponse {
 	log.Printf("hook: PreToolUse session=%s tool=%s", req.SessionID, req.ToolName)
+	// Update slug if CC sent one (picks up /rename changes).
+	if req.Slug != "" {
+		h.state.SetSlug(req.SessionID, req.Slug)
+	}
 
 	tool := model.PendingTool{
 		ToolName:  req.ToolName,
@@ -93,14 +106,44 @@ func (h *Handler) handlePreToolUse(req hookRequest) hookResponse {
 
 	// Check if autopilot should auto-approve.
 	safety := classifyQuick(tool)
-	if h.state.ShouldAutoApprove(req.SessionID, safety) {
+	approve, grace := h.state.ShouldAutoApprove(req.SessionID, safety)
+	if approve {
 		log.Printf("hook: auto-approve %s (safety=%s)", req.ToolName, safety)
 		return hookResponse{
-			HookSpecificOutput: &hookOutput{Decision: "allow"},
+			HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "allow"},
+		}
+	}
+	if grace {
+		// YOLO mode: destructive tool gets a grace period.
+		// Add to pending so TUI shows it blinking, then auto-approve after delay.
+		log.Printf("hook: YOLO grace period for %s (destructive, 10s)", req.ToolName)
+		decisionCh := h.state.AddPending(req.SessionID, tool)
+		go func() {
+			time.Sleep(10 * time.Second)
+			// Auto-approve if still pending (user didn't reject).
+			h.state.ResolvePending(req.SessionID, model.DecisionAllow)
+		}()
+		select {
+		case decision := <-decisionCh:
+			switch decision {
+			case model.DecisionAllow:
+				return hookResponse{
+					HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "allow"},
+				}
+			case model.DecisionDeny:
+				return hookResponse{
+					HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "deny"},
+				}
+			default:
+				return hookResponse{}
+			}
+		case <-time.After(60 * time.Second):
+			log.Printf("hook: timeout waiting for decision on %s (60s)", req.ToolName)
+			return hookResponse{}
 		}
 	}
 
-	// If destructive or autopilot is off, add to pending queue and wait for user.
+	// Autopilot off or destructive without YOLO: add to pending queue and wait.
 	decisionCh := h.state.AddPending(req.SessionID, tool)
 
 	// Wait for user decision (from TUI or timeout).
@@ -109,19 +152,19 @@ func (h *Handler) handlePreToolUse(req hookRequest) hookResponse {
 		switch decision {
 		case model.DecisionAllow:
 			return hookResponse{
-				HookSpecificOutput: &hookOutput{Decision: "allow"},
+				HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "allow"},
 			}
 		case model.DecisionDeny:
 			return hookResponse{
-				HookSpecificOutput: &hookOutput{Decision: "deny"},
+				HookSpecificOutput: &hookOutput{HookEventName: "PreToolUse", Decision: "deny"},
 			}
 		default:
 			// Passthrough — let CC handle it normally.
 			return hookResponse{}
 		}
-	case <-time.After(25 * time.Second):
-		// Timeout — passthrough to avoid blocking CC forever.
-		log.Printf("hook: timeout waiting for decision on %s", req.ToolName)
+	case <-time.After(60 * time.Second):
+		// Timeout — passthrough to CC's default permission logic.
+		log.Printf("hook: timeout waiting for decision on %s (60s)", req.ToolName)
 		return hookResponse{}
 	}
 }

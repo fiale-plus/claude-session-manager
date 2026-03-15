@@ -1,8 +1,9 @@
-// Package ghostty provides AppleScript-based Ghostty tab correlation.
-// Used only to enrich session data with tab names — NOT for approvals.
+// Package ghostty provides AppleScript-based Ghostty tab correlation
+// and tab switching for the "focus" (Enter) action.
 package ghostty
 
 import (
+	"fmt"
 	"log"
 	"os/exec"
 	"strconv"
@@ -58,7 +59,6 @@ func GetTabs() []Tab {
 
 	raw, err := runOsascript(enumerateScript)
 	if err != nil {
-		log.Printf("ghostty: %v", err)
 		return nil
 	}
 
@@ -88,6 +88,7 @@ func GetTabs() []Tab {
 }
 
 // CorrelateTab finds the Ghostty tab for a given working directory.
+// Also matches if session CWD is a subdirectory of a tab's working directory.
 func CorrelateTab(cwd string) string {
 	cwd = strings.TrimRight(cwd, "/")
 	for _, tab := range GetTabs() {
@@ -96,12 +97,29 @@ func CorrelateTab(cwd string) string {
 			return tab.Name
 		}
 	}
+	for _, tab := range GetTabs() {
+		tabDir := strings.TrimRight(tab.WorkingDirectory, "/")
+		if strings.HasPrefix(cwd, tabDir+"/") {
+			return tab.Name
+		}
+	}
 	return ""
 }
 
+// SwitchToTab switches to a Ghostty tab by name via System Events.
+func SwitchToTab(tabName string) bool {
+	safeName := strings.ReplaceAll(strings.ReplaceAll(tabName, `\`, `\\`), `"`, `\"`)
+	script := fmt.Sprintf(`tell application "System Events" to tell process "Ghostty"
+    click radio button "%s" of tab group 1 of window 1
+end tell`, safeName)
+	_, err := runOsascript(script)
+	return err == nil
+}
+
 func runOsascript(script string) (string, error) {
-	out, err := exec.Command("osascript", "-e", script).Output()
+	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 	if err != nil {
+		log.Printf("ghostty: osascript error: %v, output: %.100s", err, strings.TrimSpace(string(out)))
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil

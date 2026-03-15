@@ -7,12 +7,21 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/pchaganti/claude-session-manager/daemon/internal/classifier"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/model"
 )
+
+// stateOrder defines sort priority: lower number = higher priority.
+var stateOrder = map[model.SessionState]int{
+	model.StateRunning: 0,
+	model.StateWaiting: 1,
+	model.StateIdle:    2,
+	model.StateDead:    3,
+}
 
 // Manager is the central state store for the daemon.
 type Manager struct {
@@ -21,8 +30,8 @@ type Manager struct {
 	// sessions maps session_id → Session.
 	sessions map[string]*model.Session
 
-	// autopilot maps session_id → enabled. Persisted to disk.
-	autopilot map[string]bool
+	// autopilot maps session_id → mode ("off"/"on"/"yolo"). Persisted to disk.
+	autopilot map[string]string
 
 	// pending maps session_id → PendingApproval (at most one per session).
 	pending map[string]*model.PendingApproval
@@ -41,7 +50,7 @@ type Manager struct {
 func New() *Manager {
 	m := &Manager{
 		sessions:  make(map[string]*model.Session),
-		autopilot: make(map[string]bool),
+		autopilot: make(map[string]string),
 		pending:   make(map[string]*model.PendingApproval),
 		cooldowns: make(map[string]time.Time),
 	}
@@ -67,7 +76,7 @@ func (m *Manager) RegisterSession(sid, cwd, permMode string) {
 		s = &model.Session{
 			SessionID: sid,
 			CWD:       cwd,
-			State:     model.StateRunning,
+			State:     model.StateIdle,
 		}
 		m.sessions[sid] = s
 	}
@@ -76,8 +85,8 @@ func (m *Manager) RegisterSession(sid, cwd, permMode string) {
 	s.ProjectName = filepath.Base(cwd)
 
 	// Restore persisted autopilot state.
-	if ap, ok := m.autopilot[sid]; ok {
-		s.Autopilot = ap
+	if mode, ok := m.autopilot[sid]; ok && mode != "" {
+		s.AutopilotMode = mode
 	}
 
 	m.notifySubscribers()
@@ -105,8 +114,8 @@ func (m *Manager) UpdateSessionFromScanner(s *model.Session) {
 	existing, ok := m.sessions[s.SessionID]
 	if !ok {
 		// New session from scanner.
-		if ap, okAP := m.autopilot[s.SessionID]; okAP {
-			s.Autopilot = ap
+		if mode, okAP := m.autopilot[s.SessionID]; okAP && mode != "" {
+			s.AutopilotMode = mode
 		}
 		m.sessions[s.SessionID] = s
 		m.notifySubscribers()
@@ -120,6 +129,7 @@ func (m *Manager) UpdateSessionFromScanner(s *model.Session) {
 	existing.LastText = s.LastText
 	existing.LastActivity = s.LastActivity
 	existing.PID = s.PID
+	existing.TTY = s.TTY
 	existing.GitBranch = s.GitBranch
 	existing.JSONLPath = s.JSONLPath
 	existing.Slug = s.Slug
@@ -130,17 +140,21 @@ func (m *Manager) UpdateSessionFromScanner(s *model.Session) {
 		existing.ProjectName = s.ProjectName
 	}
 
-	// Classify pending tools from scanner.
-	existing.PendingTools = classifier.ClassifyPendingTools(s.PendingTools)
-	existing.HasDestructive = false
-	for _, t := range existing.PendingTools {
-		if t.Safety == model.SafetyDestructive {
-			existing.HasDestructive = true
-			break
-		}
-	}
+	// Don't touch PendingTools from scanner — only hooks set real pending state.
 
 	m.notifySubscribers()
+}
+
+// SetSlug updates the slug (display name) for a session.
+func (m *Manager) SetSlug(sid, slug string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.sessions[sid]; ok {
+		if s.Slug != slug {
+			s.Slug = slug
+			m.notifySubscribers()
+		}
+	}
 }
 
 // SetGhosttyTab enriches a session with Ghostty tab info.
@@ -217,47 +231,126 @@ func (m *Manager) ResolvePending(sid string, decision model.ApprovalDecision) bo
 }
 
 // ShouldAutoApprove checks if autopilot should auto-approve a tool for this session.
-func (m *Manager) ShouldAutoApprove(sid string, safety model.ToolSafety) bool {
+// Returns: approve immediately, or "grace" for YOLO destructive (delayed approve).
+func (m *Manager) ShouldAutoApprove(sid string, safety model.ToolSafety) (bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	s, ok := m.sessions[sid]
 	if !ok {
-		return false
+		return false, false
 	}
-	if !s.Autopilot {
-		return false
+	switch s.AutopilotMode {
+	case model.AutopilotOn:
+		// ON: approve safe+unknown, block destructive.
+		return safety != model.SafetyDestructive, false
+	case model.AutopilotYolo:
+		if safety == model.SafetyDestructive {
+			// YOLO + destructive: grace period (caller handles the delay).
+			return false, true
+		}
+		return true, false
+	default:
+		return false, false
 	}
-	// Only auto-approve safe and unknown tools. Destructive always needs manual.
-	return safety != model.SafetyDestructive
 }
 
-// ToggleAutopilot toggles autopilot for a session, returning the new state.
-func (m *Manager) ToggleAutopilot(sid string) (bool, bool) {
+// CycleAutopilot cycles autopilot mode: off → on → yolo → off.
+// Returns (new mode, ok).
+func (m *Manager) CycleAutopilot(sid string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	s, ok := m.sessions[sid]
 	if !ok {
-		return false, false
+		return "", false
 	}
 
-	s.Autopilot = !s.Autopilot
-	m.autopilot[sid] = s.Autopilot
+	switch s.AutopilotMode {
+	case model.AutopilotOn:
+		s.AutopilotMode = model.AutopilotYolo
+	case model.AutopilotYolo:
+		s.AutopilotMode = model.AutopilotOff
+	default:
+		s.AutopilotMode = model.AutopilotOn
+	}
+	m.autopilot[sid] = s.AutopilotMode
 	m.saveAutopilot()
+
+	// Approve pending tools based on new mode.
+	if pa, ok := m.pending[sid]; ok {
+		shouldApprove := false
+		switch s.AutopilotMode {
+		case model.AutopilotOn:
+			// ON: approve safe+unknown only.
+			shouldApprove = pa.Tool.Safety != model.SafetyDestructive
+		case model.AutopilotYolo:
+			// YOLO: approve everything immediately.
+			shouldApprove = true
+		}
+		if shouldApprove {
+			select {
+			case pa.ResponseCh <- model.DecisionAllow:
+			default:
+			}
+			delete(m.pending, sid)
+			m.cooldowns[sid] = time.Now()
+			log.Printf("state: autopilot %s — approved pending %s for %s", s.AutopilotMode, pa.Tool.ToolName, sid)
+		}
+	}
+
 	m.notifySubscribers()
-	return s.Autopilot, true
+	return s.AutopilotMode, true
 }
 
-// GetSessions returns a snapshot of all sessions sorted by state then activity.
+// ApproveAllPending approves all non-destructive pending tools across all sessions.
+func (m *Manager) ApproveAllPending() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	count := 0
+	for sid, pa := range m.pending {
+		if pa.Tool.Safety == model.SafetyDestructive {
+			continue
+		}
+		select {
+		case pa.ResponseCh <- model.DecisionAllow:
+		default:
+		}
+		delete(m.pending, sid)
+		m.cooldowns[sid] = time.Now()
+		count++
+	}
+	if count > 0 {
+		m.notifySubscribers()
+	}
+	return count
+}
+
+// GetSessions returns a snapshot of all sessions sorted by state then session ID.
+// Dead sessions with PID==0 are filtered out.
 func (m *Manager) GetSessions() []model.Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	result := make([]model.Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
+		// Filter out dead sessions with no PID.
+		if s.State == model.StateDead && s.PID == 0 {
+			continue
+		}
 		result = append(result, *s)
 	}
+
+	sort.Slice(result, func(i, j int) bool {
+		oi := stateOrder[result[i].State]
+		oj := stateOrder[result[j].State]
+		if oi != oj {
+			return oi < oj
+		}
+		return result[i].SessionID < result[j].SessionID
+	})
+
 	return result
 }
 

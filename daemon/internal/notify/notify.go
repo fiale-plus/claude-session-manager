@@ -62,7 +62,7 @@ func (n *Notifier) Check(sessions []model.Session) {
 
 		// Autopilot blocked by destructive tool.
 		prevD := n.prevDestr[sid]
-		if s.Autopilot && s.HasDestructive && !prevD {
+		if s.AutopilotMode == model.AutopilotOn && s.HasDestructive && !prevD {
 			n.maybeNotify(sid, now,
 				"Manual approval needed",
 				fmt.Sprintf("%s: destructive tool call needs your approval", name),
