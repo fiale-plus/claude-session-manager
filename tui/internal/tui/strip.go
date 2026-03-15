@@ -44,6 +44,9 @@ func interleave(items []string, sep string) []string {
 
 // truncateMiddle truncates a string in the middle if it exceeds maxLen.
 func truncateMiddle(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	runes := []rune(s)
 	if len(runes) <= maxLen {
 		return s
