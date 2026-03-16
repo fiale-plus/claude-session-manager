@@ -370,11 +370,19 @@ func (m *Manager) GetSessions() []model.Session {
 
 	result := make([]model.Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
-		// Filter out dead sessions with no PID.
 		if s.State == model.StateDead && s.PID == 0 {
 			continue
 		}
-		result = append(result, *s)
+		sess := *s
+		// Derive PendingTools from live pending map — never show stale tools.
+		// The pending map only has entries while a hook is actively waiting.
+		sess.PendingTools = nil
+		sess.HasDestructive = false
+		if pa, ok := m.pending[s.SessionID]; ok {
+			sess.PendingTools = []model.PendingTool{pa.Tool}
+			sess.HasDestructive = pa.Tool.Safety == model.SafetyDestructive
+		}
+		result = append(result, sess)
 	}
 
 	sort.Slice(result, func(i, j int) bool {
