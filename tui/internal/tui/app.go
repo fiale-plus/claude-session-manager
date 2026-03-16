@@ -621,28 +621,23 @@ func (m Model) View() string {
 		)
 	}
 
-	// Input bar (for + add PR).
+	// Status bar (or input bar when in input mode).
+	var statusLine string
 	if m.inputMode {
 		inputStyle := lipgloss.NewStyle().Foreground(colorFg).Bold(true)
 		cursorStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-		inputBar := inputStyle.Render("  Add PR: ") + m.inputBuffer + cursorStyle.Render("█")
-		inputBar += lipgloss.NewStyle().Foreground(colorDimFg).Render("  (paste URL or owner/repo#N, Enter to add, Esc to cancel)")
-
-		return lipgloss.JoinVertical(lipgloss.Left,
-			inputBar,
-			lipgloss.NewStyle().Width(w).Height(m.height-2).Render(""),
-			strip,
-		)
-	}
-
-	// Status bar.
-	failingPRs := 0
-	for _, p := range m.prs {
-		if p.State == "checks_failing" {
-			failingPRs++
+		statusLine = inputStyle.Render("  Add PR: ") + m.inputBuffer + cursorStyle.Render("█") +
+			lipgloss.NewStyle().Foreground(colorDimFg).Render("  (Enter add, Esc cancel)") + "\n" +
+			lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", w))
+	} else {
+		failingPRs := 0
+		for _, p := range m.prs {
+			if p.State == "checks_failing" {
+				failingPRs++
+			}
 		}
+		statusLine = renderStatusBar(m.connected, m.sessions, m.prs, failingPRs, m.flash, m.flashStyle, w)
 	}
-	statusLine := renderStatusBar(m.connected, m.sessions, m.prs, failingPRs, m.flash, m.flashStyle, w)
 	statusHeight := lipgloss.Height(statusLine)
 
 	remainingHeight := m.height - bottomHeight - statusHeight

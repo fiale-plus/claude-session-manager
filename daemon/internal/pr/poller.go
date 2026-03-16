@@ -121,7 +121,7 @@ func (p *Poller) Poll() {
 	}
 	p.mu.RUnlock()
 
-	changed := false
+	polled := false
 	for _, key := range keys {
 		p.mu.RLock()
 		pr, ok := p.tracked[key]
@@ -132,17 +132,13 @@ func (p *Poller) Poll() {
 		owner, repo, number := pr.Owner, pr.Repo, pr.Number
 		p.mu.RUnlock()
 
-		if p.pollOne(owner, repo, number) {
-			changed = true
-		}
+		p.pollOne(owner, repo, number)
+		polled = true
 	}
-	if changed {
+	if polled {
 		p.mu.Lock()
 		p.save()
 		p.mu.Unlock()
-		if p.onChange != nil {
-			p.onChange()
-		}
 		if p.onChange != nil {
 			p.onChange()
 		}
