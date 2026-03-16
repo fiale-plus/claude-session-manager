@@ -299,18 +299,44 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "home":
-		m.selectedIdx = 0
-		m.scrollOffset = 0
-		if len(m.sessions) > 0 {
+		if m.totalItems() > 0 {
+			m.selectedIdx = 0
+			m.scrollOffset = 0
 			m.trackSelection()
 		}
 		return m, nil
 
 	case "end":
-		if len(m.sessions) > 0 {
-			m.selectedIdx = len(m.sessions) - 1
+		if m.totalItems() > 0 {
+			m.selectedIdx = m.totalItems() - 1
 			m.scrollOffset = 0
 			m.trackSelection()
+		}
+		return m, nil
+
+	case "tab":
+		// Jump to next item needing attention.
+		// Priority: pending approvals (sessions) → failing PRs.
+		start := m.selectedIdx + 1
+		total := m.totalItems()
+		for i := 0; i < total; i++ {
+			idx := (start + i) % total
+			if idx < len(m.sessions) {
+				if len(m.sessions[idx].PendingTools) > 0 {
+					m.selectedIdx = idx
+					m.scrollOffset = 0
+					m.trackSelection()
+					return m, nil
+				}
+			} else {
+				prIdx := idx - len(m.sessions)
+				if prIdx < len(m.prs) && m.prs[prIdx].State == "checks_failing" {
+					m.selectedIdx = idx
+					m.scrollOffset = 0
+					m.trackSelection()
+					return m, nil
+				}
+			}
 		}
 		return m, nil
 

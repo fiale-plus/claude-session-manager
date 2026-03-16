@@ -17,6 +17,7 @@ func renderHints(queueVisible bool, hasPending bool, isPRSelected bool, width in
 
 	var keys []hint
 	keys = append(keys, hint{"\u2190\u2192\u2191\u2193", "navigate"})
+	keys = append(keys, hint{"Tab", "next alert"})
 
 	if isPRSelected {
 		// PR-specific hints.
