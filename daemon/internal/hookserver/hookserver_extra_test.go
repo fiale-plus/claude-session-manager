@@ -236,7 +236,7 @@ func TestPostToolUseNoPRPoller(t *testing.T) {
 	h.handlePostToolUse(hookRequest{
 		HookEventName: "PostToolUse",
 		SessionID:     "s1",
-		ToolOutput:    "https://github.com/owner/repo/pull/42",
+		ToolResponse: json.RawMessage(`{"stdout":"https://github.com/owner/repo/pull/42"}`),
 	})
 }
 
@@ -251,7 +251,7 @@ func TestPostToolUseEmptyOutput(t *testing.T) {
 	h.handlePostToolUse(hookRequest{
 		HookEventName: "PostToolUse",
 		SessionID:     "s1",
-		ToolOutput:    "",
+		ToolResponse: json.RawMessage(`{"stdout":""}`),
 	})
 
 	// Should not add any PR.
@@ -271,7 +271,7 @@ func TestPostToolUseNoPRURL(t *testing.T) {
 	h.handlePostToolUse(hookRequest{
 		HookEventName: "PostToolUse",
 		SessionID:     "s1",
-		ToolOutput:    "File created at /tmp/test.go",
+		ToolResponse: json.RawMessage(`{"stdout":"File created at /tmp/test.go"}`),
 	})
 
 	if len(p.GetAll()) != 0 {
@@ -289,7 +289,7 @@ func TestPostToolUseWithPRURL(t *testing.T) {
 	h.handlePostToolUse(hookRequest{
 		HookEventName: "PostToolUse",
 		SessionID:     "s1",
-		ToolOutput:    "Created PR: https://github.com/octocat/hello/pull/42",
+		ToolResponse: json.RawMessage(`{"stdout":"Created PR: https://github.com/octocat/hello/pull/42"}`),
 	})
 
 	// Give the goroutine a moment to start Poll (it will fail but we don't care).
@@ -385,7 +385,7 @@ func TestHTTPServerHandleHook_AllEvents(t *testing.T) {
 	postTo(t, ts.URL+"/hooks", hookRequest{
 		HookEventName: "PostToolUse",
 		SessionID:     "s1",
-		ToolOutput:    "PR: https://github.com/test/repo/pull/99",
+		ToolResponse: json.RawMessage(`{"stdout":"PR: https://github.com/test/repo/pull/99"}`),
 	})
 
 	time.Sleep(50 * time.Millisecond)
@@ -811,7 +811,7 @@ func TestHandlePostToolUseViaSocket(t *testing.T) {
 	req := hookRequest{
 		HookEventName: "PostToolUse",
 		SessionID:     "s1",
-		ToolOutput:    "PR created: https://github.com/test/repo/pull/1",
+		ToolResponse: json.RawMessage(`{"stdout":"PR created: https://github.com/test/repo/pull/1"}`),
 	}
 	data, _ := json.Marshal(req)
 	conn.Write(append(data, '\n'))

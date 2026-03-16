@@ -23,7 +23,7 @@ type hookRequest struct {
 	CWD            string         `json:"cwd"`
 	ToolName       string         `json:"tool_name"`
 	ToolInput      map[string]any `json:"tool_input"`
-	ToolOutput     string         `json:"tool_output"`
+	ToolResponse   json.RawMessage `json:"tool_response"`
 	PermissionMode string         `json:"permission_mode"`
 }
 
@@ -186,10 +186,16 @@ func (h *Handler) handlePreToolUse(req hookRequest) hookResponse {
 }
 
 func (h *Handler) handlePostToolUse(req hookRequest) {
-	if h.prPoll == nil || req.ToolOutput == "" {
+	if h.prPoll == nil {
 		return
 	}
-	url := prURLRe.FindString(req.ToolOutput)
+	// tool_response is a JSON object — search its raw bytes for PR URLs.
+	searchText := string(req.ToolResponse)
+	log.Printf("hook: PostToolUse session=%s tool=%s response_len=%d", req.SessionID, req.ToolName, len(searchText))
+	if searchText == "" {
+		return
+	}
+	url := prURLRe.FindString(searchText)
 	if url == "" {
 		return
 	}
