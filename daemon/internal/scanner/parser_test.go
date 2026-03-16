@@ -422,7 +422,7 @@ func TestExtractMetadataAllFields(t *testing.T) {
 	entries := []jsonlEntry{
 		{Type: "system", SessionID: "sess-1", Slug: "my-session", CWD: "/home/user/project", GitBranch: "main"},
 	}
-	sid, slug, cwd, branch := ExtractMetadata(entries)
+	sid, slug, cwd, branch, _ := ExtractMetadata(entries)
 	if sid != "sess-1" {
 		t.Errorf("sessionID = %q, want sess-1", sid)
 	}
@@ -444,7 +444,7 @@ func TestExtractMetadataFromMultipleEntries(t *testing.T) {
 		{Type: "assistant", SessionID: "sess-1"},
 		{Type: "system", SessionID: "sess-1", CWD: "/new/path", Slug: "renamed", GitBranch: "feature"},
 	}
-	sid, slug, cwd, branch := ExtractMetadata(entries)
+	sid, slug, cwd, branch, _ := ExtractMetadata(entries)
 	if sid != "sess-1" {
 		t.Errorf("sessionID = %q, want sess-1", sid)
 	}
@@ -463,7 +463,7 @@ func TestExtractMetadataPartial(t *testing.T) {
 	entries := []jsonlEntry{
 		{Type: "system", SessionID: "sess-1"},
 	}
-	sid, slug, cwd, branch := ExtractMetadata(entries)
+	sid, slug, cwd, branch, _ := ExtractMetadata(entries)
 	if sid != "sess-1" {
 		t.Errorf("sessionID = %q, want sess-1", sid)
 	}
@@ -479,7 +479,7 @@ func TestExtractMetadataPartial(t *testing.T) {
 }
 
 func TestExtractMetadataEmpty(t *testing.T) {
-	sid, slug, cwd, branch := ExtractMetadata(nil)
+	sid, slug, cwd, branch, _ := ExtractMetadata(nil)
 	if sid != "" || slug != "" || cwd != "" || branch != "" {
 		t.Errorf("nil entries should return empty strings")
 	}

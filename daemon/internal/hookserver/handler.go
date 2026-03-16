@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"log"
 	"net"
+	"regexp"
 	"time"
 
 	"github.com/pchaganti/claude-session-manager/daemon/internal/classifier"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/model"
+	"github.com/pchaganti/claude-session-manager/daemon/internal/pr"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/state"
 )
 
@@ -21,6 +23,7 @@ type hookRequest struct {
 	CWD            string         `json:"cwd"`
 	ToolName       string         `json:"tool_name"`
 	ToolInput      map[string]any `json:"tool_input"`
+	ToolOutput     string         `json:"tool_output"`
 	PermissionMode string         `json:"permission_mode"`
 }
 
@@ -34,14 +37,23 @@ type hookOutput struct {
 	Decision      string `json:"permissionDecision,omitempty"`
 }
 
+// prURLRe matches GitHub PR URLs in tool output.
+var prURLRe = regexp.MustCompile(`https://github\.com/[^/]+/[^/]+/pull/\d+`)
+
 // Handler processes individual hook connections.
 type Handler struct {
-	state *state.Manager
+	state  *state.Manager
+	prPoll *pr.Poller
 }
 
 // NewHandler creates a new hook handler.
 func NewHandler(st *state.Manager) *Handler {
 	return &Handler{state: st}
+}
+
+// SetPRPoller sets the PR poller for PostToolUse auto-detection.
+func (h *Handler) SetPRPoller(p *pr.Poller) {
+	h.prPoll = p
 }
 
 // Handle reads one request from conn, processes it, writes a response, and closes.
@@ -72,6 +84,8 @@ func (h *Handler) Handle(conn net.Conn) {
 		h.handleSessionEnd(req)
 	case "PreToolUse":
 		resp = h.handlePreToolUse(req)
+	case "PostToolUse":
+		h.handlePostToolUse(req)
 	default:
 		log.Printf("hook: unknown event: %s", req.HookEventName)
 	}
@@ -168,6 +182,23 @@ func (h *Handler) handlePreToolUse(req hookRequest) hookResponse {
 		h.state.ClearPending(req.SessionID)
 		log.Printf("hook: timeout waiting for decision on %s (60s)", req.ToolName)
 		return hookResponse{}
+	}
+}
+
+func (h *Handler) handlePostToolUse(req hookRequest) {
+	if h.prPoll == nil || req.ToolOutput == "" {
+		return
+	}
+	url := prURLRe.FindString(req.ToolOutput)
+	if url == "" {
+		return
+	}
+	log.Printf("hook: PostToolUse detected PR URL: %s", url)
+	if _, err := h.prPoll.AddFromURL(url); err != nil {
+		log.Printf("hook: auto-add PR failed: %v", err)
+	} else {
+		log.Printf("hook: auto-added PR %s", url)
+		go h.prPoll.Poll()
 	}
 }
 

@@ -18,10 +18,11 @@ type jsonlEntry struct {
 	Subtype   string    `json:"subtype,omitempty"`
 	Timestamp string    `json:"timestamp,omitempty"`
 	SessionID string    `json:"sessionId,omitempty"`
-	Slug      string    `json:"slug,omitempty"`
-	CWD       string    `json:"cwd,omitempty"`
-	GitBranch string    `json:"gitBranch,omitempty"`
-	Message   *message  `json:"message,omitempty"`
+	Slug        string    `json:"slug,omitempty"`
+	CWD         string    `json:"cwd,omitempty"`
+	GitBranch   string    `json:"gitBranch,omitempty"`
+	CustomTitle string    `json:"customTitle,omitempty"`
+	Message     *message  `json:"message,omitempty"`
 }
 
 type message struct {
@@ -324,8 +325,8 @@ func ExtractPendingTools(entries []jsonlEntry) []model.PendingTool {
 	return result
 }
 
-// ExtractMetadata extracts sessionId, slug, cwd, gitBranch from entries.
-func ExtractMetadata(entries []jsonlEntry) (sessionID, slug, cwd, gitBranch string) {
+// ExtractMetadata extracts sessionId, slug, cwd, gitBranch, customTitle from entries.
+func ExtractMetadata(entries []jsonlEntry) (sessionID, slug, cwd, gitBranch, customTitle string) {
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
 		if sessionID == "" && e.SessionID != "" {
@@ -334,13 +335,17 @@ func ExtractMetadata(entries []jsonlEntry) (sessionID, slug, cwd, gitBranch stri
 		if slug == "" && e.Slug != "" {
 			slug = e.Slug
 		}
+		// custom-title entry from /rename command.
+		if customTitle == "" && e.Type == "custom-title" && e.CustomTitle != "" {
+			customTitle = e.CustomTitle
+		}
 		if cwd == "" && e.CWD != "" {
 			cwd = e.CWD
 		}
 		if gitBranch == "" && e.GitBranch != "" {
 			gitBranch = e.GitBranch
 		}
-		if sessionID != "" && slug != "" && cwd != "" && gitBranch != "" {
+		if sessionID != "" && slug != "" && cwd != "" && gitBranch != "" && customTitle != "" {
 			break
 		}
 	}

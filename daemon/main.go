@@ -74,6 +74,10 @@ func runDaemon() {
 	stopPR := make(chan struct{})
 	go pr.RunLoop(prPoller, 30*time.Second, stopPR)
 
+	// Wire PR poller to hook servers for PostToolUse auto-detection.
+	hookSrv.SetPRPoller(prPoller)
+	httpHookSrv.SetPRPoller(prPoller)
+
 	// Start control server.
 	ctlSrv, err := ctlserver.New(ctlserver.DefaultSocket, st, prPoller)
 	if err != nil {
@@ -327,6 +331,18 @@ func installHooks(home string) {
 						"type":    "http",
 						"url":     hookURL,
 						"timeout": 90,
+					},
+				},
+			},
+		},
+		"PostToolUse": []any{
+			map[string]any{
+				"matcher": "Bash",
+				"hooks": []any{
+					map[string]any{
+						"type":    "http",
+						"url":     hookURL,
+						"timeout": 5,
 					},
 				},
 			},

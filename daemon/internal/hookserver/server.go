@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/pchaganti/claude-session-manager/daemon/internal/pr"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/state"
 )
 
@@ -39,6 +40,9 @@ func New(socketPath string, st *state.Manager) (*Server, error) {
 }
 
 // Serve accepts connections in a loop. Blocks until the listener is closed.
+// SetPRPoller sets the PR poller for PostToolUse auto-detection.
+func (s *Server) SetPRPoller(p *pr.Poller) { s.handler.SetPRPoller(p) }
+
 func (s *Server) Serve() {
 	log.Printf("hook server listening on %s", s.listener.Addr())
 	for {
