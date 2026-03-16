@@ -110,17 +110,19 @@ type procInfo struct {
 // isClaudeCLI returns true if cmd looks like the actual `claude` CLI binary,
 // excluding Claude.app, csm-daemon, and claude-session-manager.
 func isClaudeCLI(cmd string) bool {
-	base := filepath.Base(cmd)
-	if base != "claude" {
-		return false
-	}
+	// Exclude known non-CLI binaries first.
 	if strings.Contains(cmd, "Claude.app") {
 		return false
 	}
 	if strings.Contains(cmd, "csm-daemon") || strings.Contains(cmd, "claude-session-manager") {
 		return false
 	}
-	return true
+	// Match any path ending in "claude" as the binary name.
+	// filepath.Base handles all path formats:
+	//   "claude" → "claude"
+	//   "/usr/local/bin/claude" → "claude"
+	//   "/Users/x/.local/share/claude/versions/2.1.76/claude" → "claude"
+	return filepath.Base(cmd) == "claude"
 }
 
 func findClaudeProcesses() []procInfo {

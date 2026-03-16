@@ -65,12 +65,13 @@ func pillName(s client.Session) string {
 	if tab != "" && !looksLikeCommand(tab) {
 		return tab
 	}
-	// Auto slug is still better than directory name.
+	// Project name (directory) before auto-generated slug.
+	if s.ProjectName != "" && s.ProjectName != "/" {
+		return s.ProjectName
+	}
+	// Auto slug as last resort before session ID.
 	if s.Slug != "" {
 		return s.Slug
-	}
-	if s.ProjectName != "" {
-		return s.ProjectName
 	}
 	if len(s.SessionID) >= 8 {
 		return s.SessionID[:8]
@@ -89,14 +90,15 @@ func renderPill(s client.Session, selected bool, glowPos int) string {
 
 	label := icon + " " + name
 
-	// Pending badge.
+	// Pending badge — rendered separately to avoid nested ANSI conflicts.
+	badge := ""
 	if n := len(s.PendingTools); n > 0 {
-		badgeStyle := lipgloss.NewStyle().
+		badge = " " + lipgloss.NewStyle().
 			Foreground(lipgloss.ANSIColor(15)).
 			Background(colorBadgeBg).
 			Bold(true).
-			Padding(0, 1)
-		label += " " + badgeStyle.Render(fmt.Sprintf("%d", n))
+			Padding(0, 1).
+			Render(fmt.Sprintf("%d", n))
 	}
 
 	style := lipgloss.NewStyle().
@@ -112,5 +114,5 @@ func renderPill(s client.Session, selected bool, glowPos int) string {
 			Underline(true)
 	}
 
-	return style.Render(label)
+	return style.Render(label) + badge
 }
