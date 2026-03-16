@@ -143,6 +143,9 @@ func (p *Poller) Poll() {
 		if p.onChange != nil {
 			p.onChange()
 		}
+		if p.onChange != nil {
+			p.onChange()
+		}
 	}
 }
 
