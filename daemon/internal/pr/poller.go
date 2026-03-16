@@ -449,8 +449,14 @@ type ghAuthor struct {
 
 type ghCommit struct{}
 
-// ghBin returns the path to the gh CLI binary.
-func ghBin() string {
+// ghBinFunc is the function used to locate the gh binary.
+// Tests can replace it to point at a mock script.
+var ghBinFunc = defaultGhBin
+
+func ghBin() string { return ghBinFunc() }
+
+// defaultGhBin returns the path to the gh CLI binary.
+func defaultGhBin() string {
 	// Try common paths for launchd context where PATH is minimal.
 	for _, p := range []string{
 		"/opt/homebrew/bin/gh",
