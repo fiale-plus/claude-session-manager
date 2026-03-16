@@ -103,17 +103,24 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	// Activities
 	if len(s.Activities) > 0 {
 		bodyLines = append(bodyLines, styleSectionLabel.Render("\u2500\u2500 Activities"))
+		// Filter out CC internal markup activities.
+		var filtered []client.Activity
+		for _, a := range s.Activities {
+			if !containsCCInternalMarkup(a.Summary) {
+				filtered = append(filtered, a)
+			}
+		}
 		start := 0
 		overflow := 0
-		if len(s.Activities) > 8 {
-			overflow = len(s.Activities) - 8
+		if len(filtered) > 8 {
+			overflow = len(filtered) - 8
 			start = overflow
 		}
 		if overflow > 0 {
 			bodyLines = append(bodyLines, lipgloss.NewStyle().Foreground(colorSubtle).
 				Render(fmt.Sprintf("  … +%d more", overflow)))
 		}
-		visible := s.Activities[start:]
+		visible := filtered[start:]
 		total := len(visible)
 		for idx, a := range visible {
 			age := total - 1 - idx
@@ -130,8 +137,14 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 				Render(a.Timestamp.Format("15:04:05"))
 			icon := lipgloss.NewStyle().Foreground(activityColor(a.ActivityType)).
 				Render(activityIcon(a.ActivityType))
+			// Strip any remaining XML tags from summaries.
+			cleanSummary := stripXMLTags(a.Summary)
+			cleanSummary = strings.TrimSpace(cleanSummary)
+			if cleanSummary == "" {
+				continue
+			}
 			summary := lipgloss.NewStyle().Foreground(sumColor).
-				Render(truncateMiddle(a.Summary, innerWidth-20))
+				Render(truncateMiddle(cleanSummary, innerWidth-20))
 			bodyLines = append(bodyLines, fmt.Sprintf("  %s  %s  %s", ts, icon, summary))
 		}
 	}
@@ -140,10 +153,13 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	if s.LastText != "" {
 		bodyLines = append(bodyLines, sep)
 		bodyLines = append(bodyLines, styleSectionLabel.Render("\u2500\u2500 Last Output"))
-		text := s.LastText
-		wrapped := lipgloss.NewStyle().Width(innerWidth).Render("  \u201c" + text + "\u201d")
-		for _, wl := range strings.Split(wrapped, "\n") {
-			bodyLines = append(bodyLines, styleMotivation.Render(wl))
+		text := stripMarkdown(stripXMLTags(s.LastText))
+		text = strings.TrimSpace(text)
+		if text != "" {
+			wrapped := lipgloss.NewStyle().Width(innerWidth).Render("  \u201c" + text + "\u201d")
+			for _, wl := range strings.Split(wrapped, "\n") {
+				bodyLines = append(bodyLines, styleMotivation.Render(wl))
+			}
 		}
 	}
 

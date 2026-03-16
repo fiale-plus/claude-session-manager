@@ -793,6 +793,16 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 		left += "  " + flashStyle.Render(flash)
 	}
 
+	// Truncate status line to terminal width to prevent wrapping.
+	leftWidth := lipgloss.Width(left)
+	if leftWidth > width && width > 3 {
+		// Re-render with just essential parts that fit.
+		left = logo + "  " + connStatus + "  " + sessionCount + prCount
+		if flash != "" {
+			left += "  " + flashStyle.Render(flash)
+		}
+	}
+
 	sep := lipgloss.NewStyle().
 		Foreground(colorBorder).
 		Render(strings.Repeat("\u2500", max(0, width)))

@@ -42,15 +42,16 @@ func TestPillName_AutoSlugFallsBehindTab(t *testing.T) {
 	}
 }
 
-func TestPillName_CommandTabFallsBackToAutoSlug(t *testing.T) {
+func TestPillName_CommandTabFallsBackToProjectName(t *testing.T) {
 	s := client.Session{
 		SessionID:   "abc12345xyz",
 		Slug:        "zesty-dreaming-kitten",
 		GhosttyTab:  "cd /foo && bar",
 		ProjectName: "fallback",
 	}
-	if got := pillName(s); got != "zesty-dreaming-kitten" {
-		t.Errorf("command tab: got %q, want auto slug", got)
+	// Command tab is skipped; project name takes priority over auto slug.
+	if got := pillName(s); got != "fallback" {
+		t.Errorf("command tab: got %q, want 'fallback'", got)
 	}
 }
 
@@ -61,8 +62,9 @@ func TestPillName_PipeCommandTab(t *testing.T) {
 		GhosttyTab:  "cat file | grep pattern",
 		ProjectName: "fallback",
 	}
-	if got := pillName(s); got != "active-running-test" {
-		t.Errorf("pipe command: got %q, want auto slug", got)
+	// Pipe command tab is skipped; project name takes priority over auto slug.
+	if got := pillName(s); got != "fallback" {
+		t.Errorf("pipe command: got %q, want 'fallback'", got)
 	}
 }
 
@@ -73,8 +75,9 @@ func TestPillName_SemicolonCommandTab(t *testing.T) {
 		GhosttyTab:  "ls; echo done",
 		ProjectName: "proj",
 	}
-	if got := pillName(s); got != "test-slug-name" {
-		t.Errorf("semicolon command: got %q, want auto slug", got)
+	// Semicolon command tab is skipped; project name takes priority over auto slug.
+	if got := pillName(s); got != "proj" {
+		t.Errorf("semicolon command: got %q, want 'proj'", got)
 	}
 }
 
@@ -85,8 +88,9 @@ func TestPillName_PathTabFallsBack(t *testing.T) {
 		GhosttyTab:  "/usr/local/bin/something",
 		ProjectName: "fallback",
 	}
-	if got := pillName(s); got != "tiny-bright-moon" {
-		t.Errorf("path tab: got %q, want auto slug", got)
+	// Path tab is skipped; project name takes priority over auto slug.
+	if got := pillName(s); got != "fallback" {
+		t.Errorf("path tab: got %q, want 'fallback'", got)
 	}
 }
 

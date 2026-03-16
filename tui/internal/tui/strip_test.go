@@ -147,15 +147,15 @@ func TestPillName_Priority(t *testing.T) {
 		t.Errorf("auto slug + clean tab: got %q, want 'CSM'", got)
 	}
 
-	// Command-like tab name falls back to auto slug
+	// Command-like tab name falls back to project name (not auto slug)
 	s3 := client.Session{
 		SessionID:   "abc12345xyz",
 		Slug:        "zesty-dreaming-kitten",
 		GhosttyTab:  "cd /foo && bar",
 		ProjectName: "fallback",
 	}
-	if got := pillName(s3); got != "zesty-dreaming-kitten" {
-		t.Errorf("command tab: got %q, want auto slug", got)
+	if got := pillName(s3); got != "fallback" {
+		t.Errorf("command tab: got %q, want 'fallback'", got)
 	}
 
 	// No slug, no tab → project name
@@ -300,8 +300,8 @@ func TestPRPillIcon(t *testing.T) {
 		{"checks_failing", "\u2717"},
 		{"checks_running", "\u23f3"},
 		{"checks_passing", "\u2713"},
-		{"approved", "\u2705"},
-		{"merged", "\U0001f680"},
+		{"approved", "\u2713"},
+		{"merged", "\u2713"},
 		{"unknown", "\u2022"},
 	}
 	for _, tt := range tests {
@@ -377,5 +377,220 @@ func TestPadRight(t *testing.T) {
 		if got := padRight(tt.s, tt.w); got != tt.want {
 			t.Errorf("padRight(%q, %d) = %q, want %q", tt.s, tt.w, got, tt.want)
 		}
+	}
+}
+
+// === UX polish: strip overflow ===
+
+func TestRenderUnifiedStrip_OverflowIndicator(t *testing.T) {
+	// With many sessions at narrow width, strip should show overflow indicator.
+	var sessions []client.Session
+	for i := 0; i < 10; i++ {
+		sessions = append(sessions, client.Session{
+			SessionID:   "s" + itoa(i),
+			State:       "running",
+			ProjectName: "project-number-" + itoa(i),
+			PID:         1000 + i,
+		})
+	}
+
+	out := renderUnifiedStrip(sessions, nil, 0, 60, 0)
+	h := lipgloss.Height(out)
+	// Strip must remain a single content line (plus border).
+	if h > 2 {
+		t.Errorf("overflow strip height = %d, want <= 2 (should cap pills, not wrap)", h)
+	}
+}
+
+func TestRenderUnifiedStrip_SelectedAlwaysVisible(t *testing.T) {
+	// Even with overflow, selected pill must be visible.
+	var sessions []client.Session
+	for i := 0; i < 10; i++ {
+		sessions = append(sessions, client.Session{
+			SessionID:   "s" + itoa(i),
+			State:       "running",
+			ProjectName: "proj-" + itoa(i),
+			PID:         1000 + i,
+		})
+	}
+
+	// Select last session.
+	out := renderUnifiedStrip(sessions, nil, 9, 60, 0)
+	// Should contain the selected session name.
+	if !strings.Contains(out, "proj-9") {
+		t.Error("selected pill should be visible even with overflow")
+	}
+}
+
+// === UX polish: disambiguate names ===
+
+func TestDisambiguateNames_NoDuplicates(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", ProjectName: "alpha", PID: 100},
+		{SessionID: "s2", ProjectName: "beta", PID: 200},
+	}
+	names := disambiguateNames(sessions)
+	if names["s1"] != "alpha" {
+		t.Errorf("unique name: got %q, want 'alpha'", names["s1"])
+	}
+	if names["s2"] != "beta" {
+		t.Errorf("unique name: got %q, want 'beta'", names["s2"])
+	}
+}
+
+func TestDisambiguateNames_WithDuplicates(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", ProjectName: "my-project", PID: 100},
+		{SessionID: "s2", ProjectName: "my-project", PID: 200},
+		{SessionID: "s3", ProjectName: "unique", PID: 300},
+	}
+	names := disambiguateNames(sessions)
+
+	// Duplicates should have disambiguators.
+	if names["s1"] == names["s2"] {
+		t.Errorf("duplicate names should be disambiguated: s1=%q s2=%q", names["s1"], names["s2"])
+	}
+	// Both should contain the original name.
+	if !strings.Contains(names["s1"], "my-project") {
+		t.Errorf("disambiguated name should contain original: %q", names["s1"])
+	}
+	if !strings.Contains(names["s2"], "my-project") {
+		t.Errorf("disambiguated name should contain original: %q", names["s2"])
+	}
+	// Unique name unchanged.
+	if names["s3"] != "unique" {
+		t.Errorf("unique name should not change: got %q", names["s3"])
+	}
+}
+
+func TestDisambiguateNames_PIDSuffix(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", ProjectName: "project", PID: 12345},
+		{SessionID: "s2", ProjectName: "project", PID: 67890},
+	}
+	names := disambiguateNames(sessions)
+	if !strings.Contains(names["s1"], "12345") {
+		t.Errorf("expected PID in disambiguated name: %q", names["s1"])
+	}
+	if !strings.Contains(names["s2"], "67890") {
+		t.Errorf("expected PID in disambiguated name: %q", names["s2"])
+	}
+}
+
+// === UX polish: truncateWordBoundary ===
+
+func TestTruncateWordBoundary_ShortString(t *testing.T) {
+	if got := truncateWordBoundary("hello", 10); got != "hello" {
+		t.Errorf("short string: got %q, want 'hello'", got)
+	}
+}
+
+func TestTruncateWordBoundary_BreaksAtWord(t *testing.T) {
+	got := truncateWordBoundary("Fix the broken thing in production", 15)
+	// Should break at a word boundary, not mid-word.
+	if strings.Contains(got, "produ") && !strings.Contains(got, "production") {
+		t.Errorf("should not cut mid-word: got %q", got)
+	}
+	if !strings.HasSuffix(got, "\u2026") {
+		t.Errorf("truncated string should end with ellipsis: %q", got)
+	}
+}
+
+func TestTruncateWordBoundary_Empty(t *testing.T) {
+	if got := truncateWordBoundary("", 10); got != "" {
+		t.Errorf("empty string: got %q", got)
+	}
+}
+
+func TestTruncateWordBoundary_Zero(t *testing.T) {
+	if got := truncateWordBoundary("hello", 0); got != "" {
+		t.Errorf("zero max: got %q", got)
+	}
+}
+
+// === UX polish: XML/markdown stripping ===
+
+func TestStripXMLTags(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"hello world", "hello world"},
+		{"<task-notification>msg</task-notification>", "msg"},
+		{"<task-id>a6b241f</task-id>", "a6b241f"},
+		{"<to", "<to"}, // unclosed tag preserved
+		{"some <b>bold</b> text", "some bold text"},
+		{"no tags", "no tags"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := stripXMLTags(tt.input); got != tt.want {
+				t.Errorf("stripXMLTags(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsCCInternalMarkup(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"normal text", false},
+		{"<task-notification>stuff</task-notification>", true},
+		{"<task-id>abc</task-id>", true},
+		{"something </task-result>", true},
+		{"Edit: main.go", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := containsCCInternalMarkup(tt.input); got != tt.want {
+				t.Errorf("containsCCInternalMarkup(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripMarkdown(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"bold", "**8 notes**, 3 enriched**", "8 notes, 3 enriched"},
+		{"heading", "## Batch Results", "Batch Results"},
+		{"table row", "| Session | Date | Notes |", "Session, Date, Notes"},
+		{"table divider", "---|---|---", ""},
+		{"plain", "no formatting", "no formatting"},
+		{"mixed", "## Title\n**bold** text", "Title bold text"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripMarkdown(tt.input)
+			if got != tt.want {
+				t.Errorf("stripMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// === UX polish: merged PR pill ===
+
+func TestRenderPRPill_MergedShowsJustNumber(t *testing.T) {
+	pr := client.TrackedPR{
+		Owner:  "o",
+		Repo:   "r",
+		Number: 19,
+		Title:  "Fix #17: stale pending + coverage sweep (all packages 80%+)",
+		State:  "merged",
+	}
+	pill := renderPRPill(pr, false)
+	// Should NOT contain the title for merged PRs.
+	if strings.Contains(pill, "stale") || strings.Contains(pill, "coverage") {
+		t.Error("merged PR pill should not show title, just #number")
+	}
+	// Should contain the number.
+	if !strings.Contains(pill, "#19") {
+		t.Error("merged PR pill should show #number")
 	}
 }

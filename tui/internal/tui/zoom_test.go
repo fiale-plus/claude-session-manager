@@ -296,6 +296,71 @@ func TestRenderZoom_AutopilotModes(t *testing.T) {
 	}
 }
 
+// === UX polish: XML/markdown stripping in zoom ===
+
+func TestRenderZoom_StripsXMLFromActivities(t *testing.T) {
+	now := time.Now()
+	s := client.Session{
+		SessionID: "test-1234",
+		CWD:       "/a",
+		State:     "running",
+		PID:       1,
+		Activities: []client.Activity{
+			{Timestamp: now, ActivityType: "text", Summary: "<task-notification><task-id>abc</task-id></task-notification>"},
+			{Timestamp: now, ActivityType: "tool_use", Summary: "Edit: main.go"},
+		},
+		LastActivity: &now,
+	}
+
+	out := renderZoom(s, 100, 20, 0)
+	// The CC internal message should be filtered out entirely.
+	if strings.Contains(out, "<task-") {
+		t.Error("zoom should filter CC internal markup from activities")
+	}
+	// The real activity should still be visible.
+	if !strings.Contains(out, "Edit: main.go") {
+		t.Error("real activities should remain visible")
+	}
+}
+
+func TestRenderZoom_StripsMarkdownFromLastText(t *testing.T) {
+	now := time.Now()
+	s := client.Session{
+		SessionID:    "test-1234",
+		CWD:          "/a",
+		State:        "running",
+		PID:          1,
+		LastText:     "**8 notes**, 3 enriched**",
+		LastActivity: &now,
+	}
+
+	out := renderZoom(s, 100, 20, 0)
+	if strings.Contains(out, "**") {
+		t.Error("zoom should strip markdown ** from LastText")
+	}
+	// The cleaned text should still be present.
+	if !strings.Contains(out, "8 notes") {
+		t.Error("cleaned text should contain '8 notes'")
+	}
+}
+
+func TestRenderZoom_StripsXMLFromLastText(t *testing.T) {
+	now := time.Now()
+	s := client.Session{
+		SessionID:    "test-1234",
+		CWD:          "/a",
+		State:        "running",
+		PID:          1,
+		LastText:     "Result: <b>success</b>",
+		LastActivity: &now,
+	}
+
+	out := renderZoom(s, 100, 20, 0)
+	if strings.Contains(out, "<b>") {
+		t.Error("zoom should strip XML tags from LastText")
+	}
+}
+
 func TestFullView_NeverExceedsTerminalHeight(t *testing.T) {
 	now := time.Now()
 	sessions := []client.Session{
