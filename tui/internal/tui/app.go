@@ -13,8 +13,8 @@ import (
 	"github.com/pchaganti/claude-session-manager/tui/internal/client"
 )
 
-// sessionsMsg carries a session update from the daemon.
-type sessionsMsg []client.Session
+// stateMsg carries a state update (sessions + PRs) from the daemon.
+type stateMsg client.StateUpdate
 
 // connectedMsg signals that the subscription was established.
 type connectedMsg struct{}
@@ -41,7 +41,10 @@ type clearFlashMsg struct{}
 type Model struct {
 	client       *client.Client
 	sessions     []client.Session
+	prs          []client.TrackedPR
 	selectedIdx  int
+	// Total items in strip = len(sessions) + len(prs).
+	// Index 0..len(sessions)-1 = sessions, len(sessions)..end = PRs.
 	selectedSID  string // stable selection tracking by session ID
 	queueVisible bool
 	helpVisible  bool
@@ -104,14 +107,14 @@ func waitForUpdate() tea.Msg {
 		return disconnectedMsg{}
 	}
 
-	sessions, ok := <-ch
+	update, ok := <-ch
 	if !ok {
 		subMu.Lock()
 		subCh = nil
 		subMu.Unlock()
 		return disconnectedMsg{}
 	}
-	return sessionsMsg(sessions)
+	return stateMsg(update)
 }
 
 // reconnectAfter returns a command that waits then triggers reconnect.
@@ -168,9 +171,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, glowTick()
 
-	case sessionsMsg:
-		m.sessions = msg
+	case stateMsg:
+		m.sessions = msg.Sessions
+		m.prs = msg.PRs
 		// Restore selection by session ID to prevent jumping.
+		totalItems := len(m.sessions) + len(m.prs)
 		if m.selectedSID != "" {
 			found := false
 			for i, s := range m.sessions {
@@ -181,15 +186,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if !found {
-				if m.selectedIdx >= len(m.sessions) {
-					m.selectedIdx = max(0, len(m.sessions)-1)
-				}
-				if m.selectedIdx >= 0 && m.selectedIdx < len(m.sessions) {
-					m.selectedSID = m.sessions[m.selectedIdx].SessionID
+				if m.selectedIdx >= totalItems {
+					m.selectedIdx = max(0, totalItems-1)
 				}
 			}
-		} else if m.selectedIdx >= len(m.sessions) {
-			m.selectedIdx = max(0, len(m.sessions)-1)
+		} else if m.selectedIdx >= totalItems {
+			m.selectedIdx = max(0, totalItems-1)
 		}
 		return m, waitForUpdate
 
@@ -235,7 +237,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "right", "l":
-		if m.selectedIdx < len(m.sessions)-1 {
+		if m.selectedIdx < m.totalItems()-1 {
 			m.selectedIdx++
 			m.scrollOffset = 0 // reset scroll on session change
 			if m.selectedIdx < len(m.sessions) {
@@ -381,6 +383,26 @@ func (m Model) selected() *client.Session {
 	return nil
 }
 
+// selectedPR returns the currently selected PR, or nil.
+func (m Model) selectedPR() *client.TrackedPR {
+	prIdx := m.selectedIdx - len(m.sessions)
+	if prIdx >= 0 && prIdx < len(m.prs) {
+		pr := m.prs[prIdx]
+		return &pr
+	}
+	return nil
+}
+
+// isSessionSelected returns true if a session (not PR) is selected.
+func (m Model) isSessionSelected() bool {
+	return m.selectedIdx < len(m.sessions)
+}
+
+// totalItems returns the total number of items in the strip.
+func (m Model) totalItems() int {
+	return len(m.sessions) + len(m.prs)
+}
+
 // View renders the entire TUI.
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
@@ -396,16 +418,23 @@ func (m Model) View() string {
 	}
 
 	// Render bottom sections first to calculate remaining height.
-	strip := renderStrip(m.sessions, m.selectedIdx, w, m.glowPos)
+	strip := renderUnifiedStrip(m.sessions, m.prs, m.selectedIdx, w, m.glowPos)
 	stripHeight := lipgloss.Height(strip)
 
+	isSession := m.isSessionSelected()
 	hints := renderHints(m.queueVisible, hasPending, w)
 	hintsHeight := lipgloss.Height(hints)
 
 	bottomHeight := stripHeight + hintsHeight
 
 	// Status bar.
-	statusLine := renderStatusBar(m.connected, m.sessions, m.flash, m.flashStyle, w)
+	failingPRs := 0
+	for _, p := range m.prs {
+		if p.State == "checks_failing" {
+			failingPRs++
+		}
+	}
+	statusLine := renderStatusBar(m.connected, m.sessions, m.prs, failingPRs, m.flash, m.flashStyle, w)
 	statusHeight := lipgloss.Height(statusLine)
 
 	remainingHeight := m.height - bottomHeight - statusHeight
@@ -414,8 +443,14 @@ func (m Model) View() string {
 	mainContent := ""
 	if m.queueVisible && hasPending {
 		mainContent = renderQueue(m.sessions, w, remainingHeight)
-	} else if sel := m.selected(); sel != nil {
-		mainContent = renderZoom(*sel, w, remainingHeight, m.scrollOffset)
+	} else if isSession {
+		if sel := m.selected(); sel != nil {
+			mainContent = renderZoom(*sel, w, remainingHeight, m.scrollOffset)
+		} else {
+			mainContent = renderEmptyState(w, remainingHeight)
+		}
+	} else if selPR := m.selectedPR(); selPR != nil {
+		mainContent = renderPRZoom(*selPR, w, remainingHeight, m.scrollOffset)
 	} else {
 		mainContent = renderEmptyState(w, remainingHeight)
 	}
@@ -436,11 +471,11 @@ func (m Model) View() string {
 }
 
 // renderStatusBar renders the top status bar with branding, connection info, and flash.
-func renderStatusBar(connected bool, sessions []client.Session, flash string, flashStyle lipgloss.Style, width int) string {
+func renderStatusBar(connected bool, sessions []client.Session, prs []client.TrackedPR, failingPRs int, flash string, flashStyle lipgloss.Style, width int) string {
 	logo := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorAccent).
-		Render("\u2588\u2588 CSM")
+		Render("\u2588\u2588 CCC")
 
 	var connStatus string
 	if !connected {
@@ -457,6 +492,13 @@ func renderStatusBar(connected bool, sessions []client.Session, flash string, fl
 		Foreground(colorDimFg).
 		Render(pluralize(len(sessions), "session", "sessions"))
 
+	prCount := ""
+	if len(prs) > 0 {
+		prCount = "  " + lipgloss.NewStyle().
+			Foreground(colorDimFg).
+			Render(pluralize(len(prs), "PR", "PRs"))
+	}
+
 	pendingStr := ""
 	pending := countPending(sessions)
 	if pending > 0 {
@@ -464,6 +506,14 @@ func renderStatusBar(connected bool, sessions []client.Session, flash string, fl
 			Foreground(colorOrange).
 			Bold(true).
 			Render(fmt.Sprintf("  \u26a1 %d pending", pending))
+	}
+
+	failingStr := ""
+	if failingPRs > 0 {
+		failingStr = lipgloss.NewStyle().
+			Foreground(colorDestructive).
+			Bold(true).
+			Render(fmt.Sprintf("  \u2717 %d failing", failingPRs))
 	}
 
 	runningStr := ""
@@ -479,7 +529,7 @@ func renderStatusBar(connected bool, sessions []client.Session, flash string, fl
 			Render(fmt.Sprintf("  \u25b6 %d running", running))
 	}
 
-	left := logo + "  " + connStatus + "  " + sessionCount + runningStr + pendingStr
+	left := logo + "  " + connStatus + "  " + sessionCount + prCount + runningStr + pendingStr + failingStr
 
 	// Flash message (action feedback).
 	if flash != "" {
@@ -559,5 +609,5 @@ func itoa(n int) string {
 
 var (
 	subMu sync.Mutex
-	subCh <-chan []client.Session
+	subCh <-chan client.StateUpdate
 )

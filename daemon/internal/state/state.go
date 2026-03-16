@@ -402,6 +402,12 @@ func (m *Manager) Unsubscribe(ch chan struct{}) {
 	}
 }
 
+// NotifySubscribers signals all TUI subscribers that state changed.
+// Used by external packages (PR poller) to trigger TUI updates.
+func (m *Manager) NotifySubscribers() {
+	m.notifySubscribers()
+}
+
 func (m *Manager) notifySubscribers() {
 	m.subMu.Lock()
 	defer m.subMu.Unlock()

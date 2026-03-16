@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/pchaganti/claude-session-manager/daemon/internal/pr"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/state"
 )
 
@@ -17,10 +18,11 @@ const DefaultSocket = "/tmp/csm-ctl.sock"
 type Server struct {
 	listener net.Listener
 	state    *state.Manager
+	prPoll   *pr.Poller
 }
 
 // New creates a control server.
-func New(socketPath string, st *state.Manager) (*Server, error) {
+func New(socketPath string, st *state.Manager, prPoll *pr.Poller) (*Server, error) {
 	_ = os.Remove(socketPath)
 
 	ln, err := net.Listen("unix", socketPath)
@@ -32,6 +34,7 @@ func New(socketPath string, st *state.Manager) (*Server, error) {
 	return &Server{
 		listener: ln,
 		state:    st,
+		prPoll:   prPoll,
 	}, nil
 }
 
@@ -43,7 +46,7 @@ func (s *Server) Serve() {
 		if err != nil {
 			return
 		}
-		h := NewHandler(s.state)
+		h := NewHandler(s.state, s.prPoll)
 		go h.Handle(conn)
 	}
 }

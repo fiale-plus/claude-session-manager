@@ -43,7 +43,7 @@ func sendAndReceive(t *testing.T, conn net.Conn, req ctlRequest) ctlResponse {
 func setupHandler(t *testing.T) (*state.Manager, net.Conn) {
 	t.Helper()
 	st := newTestState(t)
-	h := NewHandler(st)
+	h := NewHandler(st, nil)
 
 	server, client := net.Pipe()
 	go h.Handle(server)

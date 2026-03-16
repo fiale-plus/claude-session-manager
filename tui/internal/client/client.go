@@ -48,11 +48,56 @@ type Activity struct {
 	Detail       string    `json:"detail,omitempty"`
 }
 
+// TrackedPR mirrors the daemon's PR model.
+type TrackedPR struct {
+	Owner       string    `json:"owner"`
+	Repo        string    `json:"repo"`
+	Number      int       `json:"number"`
+	Title       string    `json:"title"`
+	HeadBranch  string    `json:"head_branch"`
+	BaseBranch  string    `json:"base_branch"`
+	URL         string    `json:"url"`
+	State       string    `json:"state"`
+	Checks      []PRCheck `json:"checks"`
+	Reviews     []PRReview `json:"reviews"`
+	Mergeable   string    `json:"mergeable"`
+	Additions   int       `json:"additions"`
+	Deletions   int       `json:"deletions"`
+	CommitCount int       `json:"commit_count"`
+	AutoMerge   bool      `json:"auto_merge"`
+	Hammer      bool      `json:"hammer"`
+	HammerCount int       `json:"hammer_count"`
+	CreatedAt   time.Time `json:"created_at"`
+	Timeline    []PREvent `json:"timeline"`
+}
+
+type PRCheck struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	Detail     string `json:"detail"`
+	Duration   string `json:"duration"`
+}
+
+type PRReview struct {
+	Author string `json:"author"`
+	State  string `json:"state"`
+	Body   string `json:"body"`
+	At     string `json:"at"`
+}
+
+type PREvent struct {
+	Time    time.Time `json:"time"`
+	Icon    string    `json:"icon"`
+	Message string    `json:"message"`
+}
+
 // serverEvent is the shape of NDJSON messages from the daemon.
 type serverEvent struct {
-	Event    string    `json:"event,omitempty"`
-	Sessions []Session `json:"sessions,omitempty"`
-	OK       *bool     `json:"ok,omitempty"`
+	Event    string      `json:"event,omitempty"`
+	Sessions []Session   `json:"sessions,omitempty"`
+	PRs      []TrackedPR `json:"prs,omitempty"`
+	OK       *bool       `json:"ok,omitempty"`
 }
 
 // request is the shape of NDJSON messages sent to the daemon.
@@ -74,11 +119,14 @@ func New(socketPath string) *Client {
 	return &Client{socketPath: socketPath}
 }
 
-// Subscribe connects to the daemon, sends a subscribe request, and
-// streams session updates into the returned channel. The channel is
-// closed if the connection drops. The caller should call Subscribe
-// again to reconnect.
-func (c *Client) Subscribe() (<-chan []Session, error) {
+// StateUpdate carries both sessions and PRs from a subscribe event.
+type StateUpdate struct {
+	Sessions []Session
+	PRs      []TrackedPR
+}
+
+// Subscribe connects to the daemon and streams state updates.
+func (c *Client) Subscribe() (<-chan StateUpdate, error) {
 	conn, err := net.Dial("unix", c.socketPath)
 	if err != nil {
 		return nil, err
@@ -88,19 +136,17 @@ func (c *Client) Subscribe() (<-chan []Session, error) {
 	c.conn = conn
 	c.mu.Unlock()
 
-	// Send subscribe request.
 	if err := c.writeRequest(request{Action: "subscribe"}); err != nil {
 		conn.Close()
 		return nil, err
 	}
 
-	ch := make(chan []Session, 16)
+	ch := make(chan StateUpdate, 16)
 	go func() {
 		defer close(ch)
 		defer conn.Close()
 
 		scanner := bufio.NewScanner(conn)
-		// Allow large messages (up to 1MB).
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 		for scanner.Scan() {
@@ -109,8 +155,8 @@ func (c *Client) Subscribe() (<-chan []Session, error) {
 				log.Printf("client: unmarshal error: %v", err)
 				continue
 			}
-			if ev.Event == "sessions_updated" {
-				ch <- ev.Sessions
+			if ev.Event == "state_updated" || ev.Event == "sessions_updated" {
+				ch <- StateUpdate{Sessions: ev.Sessions, PRs: ev.PRs}
 			}
 		}
 	}()
