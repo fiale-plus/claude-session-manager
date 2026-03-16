@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/pchaganti/claude-session-manager/tui/internal/client"
@@ -22,14 +21,14 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 
 	// Line 1: owner/repo#number  title → base   state
 	prRef := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
-	refStyle := lipgloss.NewStyle().Foreground(colorAccent).Underline(true)
+	refStyle := lipgloss.NewStyle().Foreground(colorAccent)
 	stateStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.ANSIColor(0)).
 		Background(prStateColor(pr.State)).
 		Bold(true).
 		Padding(0, 1)
 
-	line1 := "  " + refStyle.Render(prRef) + "  " +
+	line1 := "  " + hyperlink(pr.URL, refStyle.Render(prRef)) + "  " +
 		styleZoomHeader.Render(pr.Title) + " " +
 		stateStyle.Render(prStateLabel(pr.State))
 	if pr.Hammer {
@@ -127,10 +126,10 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 		}
 	}
 
-	// URL.
+	// Clickable URL.
 	bodyLines = append(bodyLines, sep)
-	bodyLines = append(bodyLines, "  "+lipgloss.NewStyle().Foreground(colorAccent).Underline(true).
-		Render(pr.URL))
+	bodyLines = append(bodyLines, "  "+hyperlink(pr.URL,
+		lipgloss.NewStyle().Foreground(colorAccent).Render(pr.URL)))
 
 	// Scroll + clip.
 	maxScroll := len(bodyLines) - bodyHeight
@@ -256,5 +255,7 @@ func reviewIcon(state string) string {
 	}
 }
 
-// Suppress unused import warning.
-var _ = time.Now
+// hyperlink wraps text in OSC 8 escape sequence for clickable terminal links.
+func hyperlink(url, text string) string {
+	return fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, text)
+}

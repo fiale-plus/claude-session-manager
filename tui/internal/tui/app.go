@@ -55,6 +55,8 @@ type Model struct {
 	flashStyle   lipgloss.Style
 	glowPos      int
 	glowDir      int // 1 or -1 for ping-pong
+	inputMode    bool   // text input active (for + add PR)
+	inputBuffer  string // text being typed
 	scrollOffset int // scroll position in zoom body
 }
 
@@ -214,6 +216,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Text input mode (for + add PR).
+	if m.inputMode {
+		switch msg.String() {
+		case "enter":
+			url := strings.TrimSpace(m.inputBuffer)
+			m.inputMode = false
+			m.inputBuffer = ""
+			if url != "" {
+				return m, func() tea.Msg {
+					err := m.client.AddPR(url)
+					if err != nil {
+						return actionResultMsg{action: "add PR", err: err}
+					}
+					return actionResultMsg{action: "added PR"}
+				}
+			}
+			return m, nil
+		case "esc":
+			m.inputMode = false
+			m.inputBuffer = ""
+			return m, nil
+		case "backspace":
+			if len(m.inputBuffer) > 0 {
+				m.inputBuffer = m.inputBuffer[:len(m.inputBuffer)-1]
+			}
+			return m, nil
+		default:
+			if len(msg.String()) == 1 {
+				m.inputBuffer += msg.String()
+			}
+			return m, nil
+		}
+	}
+
 	switch msg.String() {
 	case "q":
 		if m.queueVisible || m.helpVisible {
@@ -344,8 +380,53 @@ end tell`, tabIdx, tabIdx)
 			return actionResultMsg{action: "approve all", err: err}
 		}
 
+	case "+", "=":
+		// Add PR — enter input mode.
+		m.inputMode = true
+		m.inputBuffer = ""
+		return m, nil
+
+	case "-":
+		// Remove selected PR from tracking.
+		if pr := m.selectedPR(); pr != nil {
+			key := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+			return m, func() tea.Msg {
+				err := m.client.RemovePR(key)
+				return actionResultMsg{action: "removed PR", err: err}
+			}
+		}
+
+	case "o":
+		// Open PR in browser.
+		if pr := m.selectedPR(); pr != nil {
+			url := pr.URL
+			return m, func() tea.Msg {
+				err := exec.Command("open", url).Run()
+				return actionResultMsg{action: "opened PR", err: err}
+			}
+		}
+
+	case "m":
+		// Merge selected PR.
+		if pr := m.selectedPR(); pr != nil {
+			owner, repo, number := pr.Owner, pr.Repo, pr.Number
+			return m, func() tea.Msg {
+				err := exec.Command("gh", "pr", "merge",
+					fmt.Sprintf("%d", number),
+					"--repo", fmt.Sprintf("%s/%s", owner, repo),
+					"--squash", "--auto").Run()
+				if err != nil {
+					return actionResultMsg{action: "merge", err: err}
+				}
+				return actionResultMsg{action: "merge enabled"}
+			}
+		}
+
 	case "esc":
-		if m.helpVisible {
+		if m.inputMode {
+			m.inputMode = false
+			m.inputBuffer = ""
+		} else if m.helpVisible {
 			m.helpVisible = false
 		} else if m.queueVisible {
 			m.queueVisible = false
@@ -426,6 +507,20 @@ func (m Model) View() string {
 	hintsHeight := lipgloss.Height(hints)
 
 	bottomHeight := stripHeight + hintsHeight
+
+	// Input bar (for + add PR).
+	if m.inputMode {
+		inputStyle := lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+		cursorStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+		inputBar := inputStyle.Render("  Add PR: ") + m.inputBuffer + cursorStyle.Render("█")
+		inputBar += lipgloss.NewStyle().Foreground(colorDimFg).Render("  (paste URL or owner/repo#N, Enter to add, Esc to cancel)")
+
+		return lipgloss.JoinVertical(lipgloss.Left,
+			inputBar,
+			lipgloss.NewStyle().Width(w).Height(m.height-2).Render(""),
+			strip,
+		)
+	}
 
 	// Status bar.
 	failingPRs := 0
