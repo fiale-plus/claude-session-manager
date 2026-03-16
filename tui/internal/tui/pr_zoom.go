@@ -176,7 +176,15 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 		all = append(all, "")
 	}
 
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(all, "\n"))
+	rendered := lipgloss.NewStyle().Width(width).Render(strings.Join(all, "\n"))
+
+	// Hard clip rendered output to allocated height — lipgloss Width() can
+	// wrap long lines and produce more lines than we budgeted for.
+	renderedLines := strings.Split(rendered, "\n")
+	if len(renderedLines) > height {
+		renderedLines = renderedLines[:height]
+	}
+	return strings.Join(renderedLines, "\n")
 }
 
 func prStateColor(state string) lipgloss.TerminalColor {

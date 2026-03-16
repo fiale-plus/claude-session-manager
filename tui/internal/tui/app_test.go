@@ -132,7 +132,7 @@ func TestSessionSelection_Stable(t *testing.T) {
 		{SessionID: "s1", CWD: "/a", State: "running", PID: 1},
 		{SessionID: "s4", CWD: "/d", State: "dead", PID: 4},
 	}
-	m2, _ := m.Update(sessionsMsg(newSessions))
+	m2, _ := m.Update(stateMsg{Sessions: newSessions})
 	model := m2.(Model)
 	if model.selectedSID != "s3" {
 		t.Errorf("selected SID = %q, want 's3'", model.selectedSID)
