@@ -597,7 +597,7 @@ func (m Model) View() string {
 
 	// If help is visible, render help overlay instead.
 	if m.helpVisible {
-		return renderHelp(w, m.height)
+		return renderHelp(w, m.height, m.scrollOffset)
 	}
 
 	// Render bottom sections first to calculate remaining height.
@@ -605,7 +605,7 @@ func (m Model) View() string {
 	stripHeight := lipgloss.Height(strip)
 
 	isSession := m.isSessionSelected()
-	hints := renderHints(m.queueVisible, hasPending, w)
+	hints := renderHints(m.queueVisible, hasPending, !isSession, w)
 	hintsHeight := lipgloss.Height(hints)
 
 	bottomHeight := stripHeight + hintsHeight
