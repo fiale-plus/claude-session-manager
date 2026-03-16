@@ -500,6 +500,132 @@ func TestGhPRDataParsing_DraftPR(t *testing.T) {
 
 // === stateIcon ===
 
+// === AddFromURL additional edge cases ===
+
+func TestAddFromURL_MinimalPath(t *testing.T) {
+	p := newTestPoller(t)
+	// URL with minimal path segments but valid structure.
+	pr, err := p.AddFromURL("https://github.com/a/b/pull/1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pr.Owner != "a" || pr.Repo != "b" || pr.Number != 1 {
+		t.Errorf("parsed = %s/%s#%d, want a/b#1", pr.Owner, pr.Repo, pr.Number)
+	}
+}
+
+func TestAddFromURL_LargeNumber(t *testing.T) {
+	p := newTestPoller(t)
+	pr, err := p.AddFromURL("https://github.com/a/b/pull/99999")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pr.Number != 99999 {
+		t.Errorf("number = %d, want 99999", pr.Number)
+	}
+}
+
+// === Concurrent access ===
+
+func TestConcurrentAddRemove(t *testing.T) {
+	p := newTestPoller(t)
+	done := make(chan struct{})
+	// Add and remove concurrently — should not race.
+	go func() {
+		for i := 0; i < 100; i++ {
+			p.Add("owner", "repo", i)
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		for i := 0; i < 100; i++ {
+			p.Remove("owner", "repo", i)
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		for i := 0; i < 100; i++ {
+			_ = p.GetAll()
+		}
+		done <- struct{}{}
+	}()
+	<-done
+	<-done
+	<-done
+}
+
+func TestConcurrentCycleAutopilot(t *testing.T) {
+	p := newTestPoller(t)
+	p.Add("owner", "repo", 1)
+	done := make(chan struct{})
+	for g := 0; g < 5; g++ {
+		go func() {
+			for i := 0; i < 20; i++ {
+				p.CycleAutopilot("owner", "repo", 1)
+			}
+			done <- struct{}{}
+		}()
+	}
+	for g := 0; g < 5; g++ {
+		<-done
+	}
+}
+
+func TestConcurrentFailingCount(t *testing.T) {
+	p := newTestPoller(t)
+	pr := p.Add("owner", "repo", 1)
+	pr.State = StateChecksFailing
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 50; i++ {
+			_ = p.FailingCount()
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		for i := 0; i < 50; i++ {
+			_ = p.GetAll()
+		}
+		done <- struct{}{}
+	}()
+	<-done
+	<-done
+}
+
+// === Persistence edge cases ===
+
+func TestPersistence_EmptyStore(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "prs.json")
+	// Write empty JSON object.
+	_ = os.WriteFile(storePath, []byte("{}"), 0o644)
+	p := NewPoller(storePath, nil)
+	all := p.GetAll()
+	if len(all) != 0 {
+		t.Errorf("empty store: got %d PRs, want 0", len(all))
+	}
+}
+
+func TestPersistence_NullJSON(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "prs.json")
+	_ = os.WriteFile(storePath, []byte("null"), 0o644)
+	p := NewPoller(storePath, nil)
+	// Should not panic and should initialize empty.
+	all := p.GetAll()
+	if len(all) != 0 {
+		t.Errorf("null JSON: got %d PRs, want 0", len(all))
+	}
+}
+
+// === ghBin ===
+
+func TestGhBin(t *testing.T) {
+	// Should return a non-empty string regardless of environment.
+	bin := ghBin()
+	if bin == "" {
+		t.Error("ghBin() should not return empty string")
+	}
+}
+
 func TestStateIcon(t *testing.T) {
 	tests := []struct {
 		state PRState

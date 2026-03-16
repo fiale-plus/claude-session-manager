@@ -1,6 +1,7 @@
 package classifier
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pchaganti/claude-session-manager/daemon/internal/model"
@@ -391,5 +392,64 @@ func TestDestructivePatternsInMiddleOfCommand(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("Bash(%q) = %q, want %q", tt.cmd, got, tt.want)
 		}
+	}
+}
+
+func TestNonStringCommandValue(t *testing.T) {
+	// command value is not a string — should return unknown, not panic.
+	got := ClassifyTool("Bash", map[string]any{"command": 42})
+	if got != model.SafetyUnknown {
+		t.Errorf("non-string command = %q, want unknown", got)
+	}
+	got = ClassifyTool("Bash", map[string]any{"command": nil})
+	if got != model.SafetyUnknown {
+		t.Errorf("nil command = %q, want unknown", got)
+	}
+	got = ClassifyTool("Bash", map[string]any{"command": true})
+	if got != model.SafetyUnknown {
+		t.Errorf("bool command = %q, want unknown", got)
+	}
+	got = ClassifyTool("Bash", map[string]any{"command": []string{"ls"}})
+	if got != model.SafetyUnknown {
+		t.Errorf("slice command = %q, want unknown", got)
+	}
+}
+
+func TestNilToolInput(t *testing.T) {
+	// Bash with nil tool input should return unknown, not panic.
+	got := ClassifyTool("Bash", nil)
+	if got != model.SafetyUnknown {
+		t.Errorf("nil input = %q, want unknown", got)
+	}
+}
+
+func TestUnicodeCommand(t *testing.T) {
+	// Unicode in command should not cause panic.
+	got := ClassifyTool("Bash", map[string]any{"command": "echo 'こんにちは'"})
+	if got != model.SafetySafe {
+		t.Errorf("unicode echo = %q, want safe", got)
+	}
+}
+
+func TestVeryLongCommand(t *testing.T) {
+	// Very long command should not cause issues.
+	long := "ls " + strings.Repeat("-l ", 10000)
+	got := ClassifyTool("Bash", map[string]any{"command": long})
+	if got != model.SafetySafe {
+		t.Errorf("very long ls = %q, want safe", got)
+	}
+}
+
+func TestNestedQuotesCommand(t *testing.T) {
+	got := ClassifyTool("Bash", map[string]any{"command": `echo "he said 'hello'" && ls`})
+	if got != model.SafetySafe {
+		t.Errorf("nested quotes = %q, want safe", got)
+	}
+}
+
+func TestRmAtEndOfPipe(t *testing.T) {
+	got := ClassifyTool("Bash", map[string]any{"command": "find . -name '*.tmp' | xargs rm"})
+	if got != model.SafetyDestructive {
+		t.Errorf("piped rm = %q, want destructive", got)
 	}
 }

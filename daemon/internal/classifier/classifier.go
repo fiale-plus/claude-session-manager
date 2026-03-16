@@ -174,7 +174,11 @@ func classifyBash(toolInput map[string]any) model.ToolSafety {
 	if !ok {
 		return model.SafetyUnknown
 	}
-	command := strings.TrimSpace(cmdRaw.(string))
+	cmdStr, ok := cmdRaw.(string)
+	if !ok {
+		return model.SafetyUnknown
+	}
+	command := strings.TrimSpace(cmdStr)
 	if command == "" {
 		return model.SafetyUnknown
 	}

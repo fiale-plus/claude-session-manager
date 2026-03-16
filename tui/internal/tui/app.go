@@ -90,10 +90,6 @@ func (m Model) subscribeCmd() tea.Cmd {
 			return disconnectedMsg{}
 		}
 
-		go func() {
-			_ = ch
-		}()
-
 		subMu.Lock()
 		subCh = ch
 		subMu.Unlock()
@@ -265,11 +261,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.queueVisible || m.helpVisible {
 			return m, nil
 		}
-		m.client.Close()
+		if m.client != nil {
+			m.client.Close()
+		}
 		return m, tea.Quit
 
 	case "ctrl+c":
-		m.client.Close()
+		if m.client != nil {
+			m.client.Close()
+		}
 		return m, tea.Quit
 
 	case "left":

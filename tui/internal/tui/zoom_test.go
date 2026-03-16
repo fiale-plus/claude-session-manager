@@ -172,6 +172,130 @@ func TestRenderZoom_ShowsPermissionMode(t *testing.T) {
 
 // TestFullView_NeverExceedsTerminalHeight is the integration-level regression:
 // the full View() output must never exceed m.height.
+// === Iteration 10a: Tool detail rendering ===
+
+func TestToolDetail_AllKeys(t *testing.T) {
+	tests := []struct {
+		name   string
+		tool   client.PendingTool
+		expect string
+	}{
+		{"command", client.PendingTool{ToolInput: map[string]any{"command": "ls -la"}}, "ls -la"},
+		{"file_path", client.PendingTool{ToolInput: map[string]any{"file_path": "/foo.go"}}, "/foo.go"},
+		{"pattern", client.PendingTool{ToolInput: map[string]any{"pattern": "TODO"}}, "TODO"},
+		{"query", client.PendingTool{ToolInput: map[string]any{"query": "search term"}}, "search term"},
+		{"description", client.PendingTool{ToolInput: map[string]any{"description": "a desc"}}, "a desc"},
+		{"prompt", client.PendingTool{ToolInput: map[string]any{"prompt": "hello"}}, "hello"},
+		{"nil input", client.PendingTool{ToolInput: nil}, ""},
+		{"empty input", client.PendingTool{ToolInput: map[string]any{}}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toolDetail(tt.tool, 80)
+			if got != tt.expect {
+				t.Errorf("toolDetail = %q, want %q", got, tt.expect)
+			}
+		})
+	}
+}
+
+func TestToolDetail_Truncation(t *testing.T) {
+	tool := client.PendingTool{ToolInput: map[string]any{"command": strings.Repeat("x", 200)}}
+	got := toolDetail(tool, 20)
+	if len(got) > 20 {
+		t.Errorf("toolDetail length = %d, want <= 20", len(got))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Error("truncated toolDetail should end with '...'")
+	}
+}
+
+func TestToolDetail_ShortMaxLen(t *testing.T) {
+	tool := client.PendingTool{ToolInput: map[string]any{"command": "long command here"}}
+	// maxLen <= 5 should not truncate with "..."
+	got := toolDetail(tool, 3)
+	if len(got) > 17 { // original length, no truncation for small maxLen
+		t.Errorf("very short maxLen: got %q", got)
+	}
+}
+
+// === Iteration 10b: Safety markers ===
+
+func TestSafetyMarker_AllTypes(t *testing.T) {
+	for _, safety := range []string{"safe", "destructive", "unknown", ""} {
+		got := safetyMarker(safety)
+		if got == "" {
+			t.Errorf("safetyMarker(%q) should not be empty", safety)
+		}
+	}
+}
+
+// === Iteration 10c: formatAge edge cases ===
+
+func TestFormatAge_ExactBoundaries(t *testing.T) {
+	tests := []struct {
+		dur  time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{59 * time.Second, "59s"},
+		{60 * time.Second, "1m"},
+		{time.Hour, "1h"},
+		{24 * time.Hour, "1d"},
+		{48 * time.Hour, "2d"},
+		{25 * time.Hour, "1d 1h"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if got := formatAge(tt.dur); got != tt.want {
+				t.Errorf("formatAge(%v) = %q, want %q", tt.dur, got, tt.want)
+			}
+		})
+	}
+}
+
+// === Iteration 10d: Zoom with empty session ===
+
+func TestRenderZoom_EmptySession(t *testing.T) {
+	s := client.Session{
+		SessionID: "empty",
+		State:     "idle",
+	}
+	out := renderZoom(s, 80, 20, 0)
+	if out == "" {
+		t.Error("empty session should still render")
+	}
+}
+
+// === Iteration 10e: Zoom with nil LastActivity ===
+
+func TestRenderZoom_NilLastActivity(t *testing.T) {
+	s := client.Session{
+		SessionID:    "test",
+		CWD:          "/home/test",
+		State:        "running",
+		PID:          123,
+		LastActivity: nil,
+	}
+	out := renderZoom(s, 80, 20, 0)
+	if out == "" {
+		t.Error("nil LastActivity should still render")
+	}
+}
+
+// === Iteration 10f: Zoom with all autopilot modes ===
+
+func TestRenderZoom_AutopilotModes(t *testing.T) {
+	for _, mode := range []string{"off", "on", "yolo", ""} {
+		s := testSession()
+		s.AutopilotMode = mode
+		out := renderZoom(s, 100, 20, 0)
+		if out == "" {
+			t.Errorf("autopilot=%q: should produce output", mode)
+		}
+	}
+}
+
 func TestFullView_NeverExceedsTerminalHeight(t *testing.T) {
 	now := time.Now()
 	sessions := []client.Session{

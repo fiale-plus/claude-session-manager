@@ -216,6 +216,224 @@ func TestRenderQueue_NoPanic(t *testing.T) {
 
 // === Iteration 20: All states in View ===
 
+// === Iteration 20a: View with zero dimensions returns loading ===
+
+func TestView_ZeroDimensions(t *testing.T) {
+	m := testModel(fourSessions())
+	m.width = 0
+	m.height = 0
+	view := m.View()
+	if !strings.Contains(view, "Loading") {
+		t.Error("zero dimensions should show 'Loading...'")
+	}
+}
+
+// === Iteration 20b: Tab key wrapping ===
+
+func TestHandleKey_TabWraps(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", State: "running", PID: 1, CWD: "/a"},
+		{SessionID: "s2", State: "waiting", PID: 2, CWD: "/b",
+			PendingTools: []client.PendingTool{{ToolName: "Bash", Safety: "safe"}}},
+		{SessionID: "s3", State: "idle", PID: 3, CWD: "/c"},
+	}
+	m := testModel(sessions)
+	m.selectedIdx = 2 // start at s3
+
+	// Tab should find s2 (the one with pending tools), wrapping around.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m2.(Model).selectedIdx != 1 {
+		t.Errorf("Tab: selectedIdx = %d, want 1 (s2 has pending)", m2.(Model).selectedIdx)
+	}
+}
+
+// === Iteration 20c: Tab with no pending items ===
+
+func TestHandleKey_TabNoPending(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", State: "running", PID: 1, CWD: "/a"},
+		{SessionID: "s2", State: "idle", PID: 2, CWD: "/b"},
+	}
+	m := testModel(sessions)
+	m.selectedIdx = 0
+
+	// Tab with no pending tools should not change selection.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m2.(Model).selectedIdx != 0 {
+		t.Errorf("Tab no pending: selectedIdx = %d, want 0 (unchanged)", m2.(Model).selectedIdx)
+	}
+}
+
+// === Iteration 20d: Selected PR tracking ===
+
+func TestSessionSelection_PRTracking(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", CWD: "/a", State: "running", PID: 1},
+	}
+	prs := []client.TrackedPR{
+		{Owner: "o", Repo: "r", Number: 42, Title: "PR", State: "checks_passing"},
+	}
+
+	m := testModel(sessions)
+	m.prs = prs
+	m.selectedIdx = 1 // PR selected
+	m.selectedPRKey = "o/r#42"
+
+	// Simulate state update with reordered PRs.
+	newPRs := []client.TrackedPR{
+		{Owner: "other", Repo: "repo", Number: 1, Title: "New", State: "merged"},
+		{Owner: "o", Repo: "r", Number: 42, Title: "PR Updated", State: "checks_passing"},
+	}
+	m2, _ := m.Update(stateMsg{Sessions: sessions, PRs: newPRs})
+	model := m2.(Model)
+	if model.selectedPRKey != "o/r#42" {
+		t.Errorf("PR key = %q, want o/r#42", model.selectedPRKey)
+	}
+	if model.selectedIdx != 2 { // 1 session + 1 new PR before it
+		t.Errorf("after reorder, selectedIdx = %d, want 2", model.selectedIdx)
+	}
+}
+
+// === Iteration 20e: Input mode ===
+
+func TestInputMode_BackspaceOnEmpty(t *testing.T) {
+	m := testModel(nil)
+	m.inputMode = true
+	m.inputBuffer = ""
+	// Backspace on empty buffer should not panic.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m2.(Model).inputBuffer != "" {
+		t.Error("backspace on empty should keep empty buffer")
+	}
+}
+
+func TestInputMode_EscCancels(t *testing.T) {
+	m := testModel(nil)
+	m.inputMode = true
+	m.inputBuffer = "some text"
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	model := m2.(Model)
+	if model.inputMode {
+		t.Error("Esc should exit input mode")
+	}
+	if model.inputBuffer != "" {
+		t.Error("Esc should clear buffer")
+	}
+}
+
+func TestInputMode_TypeCharacters(t *testing.T) {
+	m := testModel(nil)
+	m.inputMode = true
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if m2.(Model).inputBuffer != "a" {
+		t.Errorf("typed char: buffer = %q, want 'a'", m2.(Model).inputBuffer)
+	}
+}
+
+// === Iteration 20f: Selected helpers ===
+
+func TestSelected_NoSessions(t *testing.T) {
+	m := testModel(nil)
+	if m.selected() != nil {
+		t.Error("no sessions: selected() should be nil")
+	}
+}
+
+func TestSelectedPR_NoPRs(t *testing.T) {
+	m := testModel(nil)
+	m.selectedIdx = 0
+	if m.selectedPR() != nil {
+		t.Error("no PRs: selectedPR() should be nil")
+	}
+}
+
+func TestSelectedPR_WithPRs(t *testing.T) {
+	m := testModel(nil)
+	m.prs = []client.TrackedPR{
+		{Owner: "o", Repo: "r", Number: 1},
+	}
+	m.selectedIdx = 0 // points to PR since no sessions
+	pr := m.selectedPR()
+	if pr == nil {
+		t.Fatal("selectedPR should not be nil")
+	}
+	if pr.Number != 1 {
+		t.Errorf("PR number = %d, want 1", pr.Number)
+	}
+}
+
+func TestTotalItems(t *testing.T) {
+	m := testModel(fourSessions())
+	m.prs = []client.TrackedPR{{}, {}}
+	if m.totalItems() != 6 {
+		t.Errorf("totalItems = %d, want 6", m.totalItems())
+	}
+}
+
+// === Iteration 20g: Key ignored when not applicable ===
+
+func TestHandleKey_QDoesNotQuitWithQueue(t *testing.T) {
+	m := testModel(fourSessions())
+	m.queueVisible = true
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd != nil {
+		t.Error("q with queue visible should not produce quit cmd")
+	}
+	_ = m2
+}
+
+func TestHandleKey_CtrlCAlwaysQuits(t *testing.T) {
+	m := testModel(fourSessions())
+	m.client = client.New("/nonexistent.sock") // provide non-nil client
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Error("ctrl+c should always produce a command")
+	}
+}
+
+// === Iteration 20h: itoa edge cases ===
+
+func TestItoa(t *testing.T) {
+	tests := []struct {
+		n    int
+		want string
+	}{
+		{0, "0"},
+		{1, "1"},
+		{-1, "-1"},
+		{42, "42"},
+		{-999, "-999"},
+		{100, "100"},
+	}
+	for _, tt := range tests {
+		if got := itoa(tt.n); got != tt.want {
+			t.Errorf("itoa(%d) = %q, want %q", tt.n, got, tt.want)
+		}
+	}
+}
+
+// === Iteration 20i: View with PRs selected ===
+
+func TestView_PRSelected(t *testing.T) {
+	sessions := fourSessions()
+	prs := []client.TrackedPR{
+		{Owner: "o", Repo: "r", Number: 42, Title: "Fix", State: "checks_passing",
+			HeadBranch: "fix", BaseBranch: "main", Additions: 5, Deletions: 2,
+			CommitCount: 1, Mergeable: "MERGEABLE", AutopilotMode: "auto"},
+	}
+	m := testModel(sessions)
+	m.prs = prs
+	m.selectedIdx = len(sessions) // select the PR
+	view := m.View()
+	if view == "" {
+		t.Error("view with PR selected should not be empty")
+	}
+	lines := strings.Split(view, "\n")
+	if len(lines) > m.height {
+		t.Errorf("view %d lines exceeds height %d", len(lines), m.height)
+	}
+}
+
 func TestView_AllStates(t *testing.T) {
 	now := time.Now()
 	sessions := []client.Session{

@@ -391,16 +391,6 @@ func isToolResult(entry jsonlEntry) bool {
 	return false
 }
 
-func getToolUseIDs(entry jsonlEntry) map[string]struct{} {
-	ids := make(map[string]struct{})
-	for _, b := range parseContent(entry) {
-		if b.Type == "tool_use" && b.ID != "" {
-			ids[b.ID] = struct{}{}
-		}
-	}
-	return ids
-}
-
 func getToolResultIDs(entry jsonlEntry) []string {
 	var ids []string
 	for _, b := range parseContent(entry) {
