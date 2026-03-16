@@ -9,30 +9,38 @@ import (
 // renderHints renders the keyboard hints bar, fitting as many hints as the
 // width allows.  The last hint is always "h help" so the user knows how to
 // discover the rest.
-func renderHints(queueVisible bool, hasPending bool, width int) string {
+func renderHints(queueVisible bool, hasPending bool, isPRSelected bool, width int) string {
 	type hint struct {
 		key  string
 		desc string
 	}
 
-	// Build ordered hint list — "h help" is always last.
 	var keys []hint
 	keys = append(keys, hint{"\u2190\u2192\u2191\u2193", "navigate"})
-	keys = append(keys, hint{"Enter", "focus"})
-	keys = append(keys, hint{"a", "autopilot"})
+	keys = append(keys, hint{"Tab", "next alert"})
 
-	if hasPending {
-		keys = append(keys, hint{"y", "approve"}, hint{"n", "reject"})
-	}
-
-	if queueVisible {
-		keys = append(keys, hint{"Esc", "close queue"})
+	if isPRSelected {
+		// PR-specific hints.
+		keys = append(keys, hint{"Enter", "open"})
+		keys = append(keys, hint{"a", "autopilot"})
+		keys = append(keys, hint{"m", "merge"})
+		keys = append(keys, hint{"+", "add PR"})
+		keys = append(keys, hint{"-", "remove"})
 	} else {
-		keys = append(keys, hint{"Q", "queue"})
-	}
-
-	if hasPending {
-		keys = append(keys, hint{"A", "approve all"})
+		// Session-specific hints.
+		keys = append(keys, hint{"Enter", "focus"})
+		keys = append(keys, hint{"a", "autopilot"})
+		if hasPending {
+			keys = append(keys, hint{"y", "approve"}, hint{"n", "reject"})
+		}
+		if queueVisible {
+			keys = append(keys, hint{"Esc", "close"})
+		} else {
+			keys = append(keys, hint{"Q", "queue"})
+		}
+		if hasPending {
+			keys = append(keys, hint{"A", "approve all"})
+		}
 	}
 
 	// "h help" is the anchor — always shown last.
@@ -70,8 +78,8 @@ func renderHints(queueVisible bool, hasPending bool, width int) string {
 	return styleHintsBar.Width(width).Render(line)
 }
 
-// renderHelp renders a full-screen help overlay with keybindings and info.
-func renderHelp(width, height int) string {
+// renderHelp renders a scrollable help overlay.
+func renderHelp(width, height, scrollOffset int) string {
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorAccent).
@@ -81,20 +89,32 @@ func renderHelp(width, height int) string {
 		Foreground(colorBorder).
 		Render(strings.Repeat("\u2500", min(width-6, 50)))
 
+	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+
 	bindings := []struct{ key, desc string }{
-		{"\u2190 / \u2192", "Navigate between sessions"},
+		{"\u2190 / \u2192", "Navigate sessions and PRs"},
 		{"\u2191 / \u2193", "Scroll detail panel"},
-		{"Home / End", "Jump to first / last session"},
+		{"Home / End", "Jump to first / last item"},
 		{"PgUp / PgDn", "Scroll 5 lines at a time"},
-		{"Enter", "Focus (switch to) the selected session's Ghostty tab"},
-		{"a", "Toggle autopilot for the selected session"},
-		{"y", "Approve the pending tool call"},
-		{"n", "Reject the pending tool call"},
-		{"Q", "Toggle approval queue overlay"},
-		{"A", "Approve all safe pending tool calls"},
+		{"", ""},
+		{"", "Sessions"},
+		{"Enter", "Focus — switch to Ghostty tab"},
+		{"a", "Cycle autopilot: OFF → ON → YOLO"},
+		{"y / n", "Approve / reject pending tool"},
+		{"A", "Approve all safe pending tools"},
+		{"Q", "Toggle approval queue"},
+		{"", ""},
+		{"", "Pull Requests"},
+		{"Enter", "Open PR in browser"},
+		{"a", "Cycle PR autopilot: OFF → AUTO → YOLO"},
+		{"+", "Add PR to tracking (paste URL)"},
+		{"-", "Remove selected PR"},
+		{"m", "Merge — pick strategy"},
+		{"o", "Open PR in browser"},
+		{"", ""},
 		{"h", "Toggle this help screen"},
-		{"Esc", "Close help / close queue"},
-		{"q", "Quit CSM"},
+		{"Esc", "Close overlay"},
+		{"q", "Quit"},
 	}
 
 	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(colorFg).Width(12)
@@ -102,34 +122,64 @@ func renderHelp(width, height int) string {
 
 	var lines []string
 	for _, b := range bindings {
+		if b.key == "" && b.desc == "" {
+			lines = append(lines, "")
+			continue
+		}
+		if b.key == "" {
+			lines = append(lines, "  "+sectionStyle.Render(b.desc))
+			continue
+		}
 		lines = append(lines, "  "+keyStyle.Render(b.key)+"  "+descStyle.Render(b.desc))
 	}
 
 	autopilotInfo := lipgloss.NewStyle().Foreground(colorDimFg).Italic(true).Render(
-		"Autopilot auto-approves safe tools. Destructive commands always need manual approval.")
+		"Session: OFF → ON (safe auto) → YOLO (all, 10s grace for destructive)\n" +
+			"PR: OFF → AUTO (hammer CI + merge on approval) → YOLO (merge without review)")
 
 	stateInfo := lipgloss.NewStyle().Foreground(colorDimFg).Render(
-		"\u25b6 running  \u23f8 waiting  \u2714 idle  \u25cf stopped")
+		"Sessions: \u25b6 running  \u23f8 waiting  \u2714 idle  \u25cf stopped\n" +
+			"PRs: \u2717 failing  \u2713 passing  \u23f3 running  \U0001F680 merged")
 
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		sep,
-		"",
-		strings.Join(lines, "\n"),
-		"",
-		sep,
-		"",
-		autopilotInfo,
-		"",
-		stateInfo,
-	)
+	// Build all content lines.
+	var allLines []string
+	allLines = append(allLines, title)
+	allLines = append(allLines, sep)
+	allLines = append(allLines, "")
+	allLines = append(allLines, lines...)
+	allLines = append(allLines, "")
+	allLines = append(allLines, sep)
+	allLines = append(allLines, "")
+	for _, l := range strings.Split(autopilotInfo, "\n") {
+		allLines = append(allLines, l)
+	}
+	allLines = append(allLines, "")
+	for _, l := range strings.Split(stateInfo, "\n") {
+		allLines = append(allLines, l)
+	}
+
+	// Scroll + clip.
+	viewHeight := height - 4
+	maxScroll := len(allLines) - viewHeight
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scrollOffset > maxScroll {
+		scrollOffset = maxScroll
+	}
+	visible := allLines
+	if scrollOffset > 0 && scrollOffset < len(visible) {
+		visible = visible[scrollOffset:]
+	}
+	if len(visible) > viewHeight {
+		visible = visible[:viewHeight]
+	}
+
+	body := strings.Join(visible, "\n")
 
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
 		Padding(1, 3).
-		Background(colorPanelBg).
-		Width(width - 4).
-		Height(height - 2).
+		Width(width).
+		Height(height).
 		Render(body)
 }
