@@ -18,6 +18,7 @@ import (
 	"github.com/pchaganti/claude-session-manager/daemon/internal/ghostty"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/hookserver"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/notify"
+	"github.com/pchaganti/claude-session-manager/daemon/internal/pr"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/scanner"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/state"
 )
@@ -64,8 +65,17 @@ func runDaemon() {
 	defer httpHookSrv.Close()
 	go httpHookSrv.Serve()
 
+	// Start PR poller.
+	home, _ := os.UserHomeDir()
+	prStorePath := filepath.Join(home, ".csm", "prs.json")
+	prPoller := pr.NewPoller(prStorePath, func() {
+		st.NotifySubscribers()
+	})
+	stopPR := make(chan struct{})
+	go pr.RunLoop(prPoller, 30*time.Second, stopPR)
+
 	// Start control server.
-	ctlSrv, err := ctlserver.New(ctlserver.DefaultSocket, st)
+	ctlSrv, err := ctlserver.New(ctlserver.DefaultSocket, st, prPoller)
 	if err != nil {
 		log.Fatalf("control server: %v", err)
 	}
@@ -93,6 +103,7 @@ func runDaemon() {
 
 	log.Println("csm-daemon shutting down")
 	close(stopScanner)
+	close(stopPR)
 }
 
 func ghosttyLoop(st *state.Manager, stop <-chan struct{}) {

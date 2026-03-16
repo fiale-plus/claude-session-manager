@@ -1,0 +1,260 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/pchaganti/claude-session-manager/tui/internal/client"
+)
+
+// renderPRZoom renders the PR detail panel.
+func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) string {
+	if width < 10 || height < 4 {
+		return ""
+	}
+
+	innerWidth := width - 4
+
+	// ── Fixed header (2 lines) ──
+	var headerLines []string
+
+	// Line 1: owner/repo#number  title → base   state
+	prRef := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+	refStyle := lipgloss.NewStyle().Foreground(colorAccent).Underline(true)
+	stateStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.ANSIColor(0)).
+		Background(prStateColor(pr.State)).
+		Bold(true).
+		Padding(0, 1)
+
+	line1 := "  " + refStyle.Render(prRef) + "  " +
+		styleZoomHeader.Render(pr.Title) + " " +
+		stateStyle.Render(prStateLabel(pr.State))
+	if pr.Hammer {
+		line1 += " " + lipgloss.NewStyle().Foreground(colorOrange).Bold(true).Render("🔨")
+	}
+	headerLines = append(headerLines, line1)
+
+	// Line 2: branch → base  +42 -12  3 commits  mergeable
+	var infoParts []string
+	infoParts = append(infoParts, pr.HeadBranch+" → "+pr.BaseBranch)
+	infoParts = append(infoParts, fmt.Sprintf("+%d -%d", pr.Additions, pr.Deletions))
+	infoParts = append(infoParts, fmt.Sprintf("%d commits", pr.CommitCount))
+	if pr.Mergeable == "MERGEABLE" {
+		infoParts = append(infoParts, "mergeable")
+	} else if pr.Mergeable == "CONFLICTING" {
+		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorDestructive).Render("conflicts"))
+	}
+	if pr.AutoMerge {
+		infoParts = append(infoParts, "automerge")
+	}
+	headerLines = append(headerLines, "  "+lipgloss.NewStyle().Foreground(colorDimFg).
+		Render(strings.Join(infoParts, "  ")))
+
+	headerHeight := len(headerLines)
+	bodyHeight := height - headerHeight
+
+	// ── Scrollable body ──
+	var bodyLines []string
+
+	sep := lipgloss.NewStyle().Foreground(colorBorder).
+		Render(strings.Repeat("─", min(innerWidth, 60)))
+
+	// Checks section.
+	if len(pr.Checks) > 0 {
+		passing, total := 0, len(pr.Checks)
+		for _, c := range pr.Checks {
+			if c.Conclusion == "SUCCESS" || c.Conclusion == "NEUTRAL" {
+				passing++
+			}
+		}
+		bodyLines = append(bodyLines, styleSectionLabel.Render(
+			fmt.Sprintf("── Checks (%d/%d passing)", passing, total)))
+
+		for _, c := range pr.Checks {
+			icon := checkIcon(c)
+			name := lipgloss.NewStyle().Foreground(colorFg).Render(c.Name)
+			status := checkStatusText(c)
+			dur := ""
+			if c.Duration != "" {
+				dur = "  " + lipgloss.NewStyle().Foreground(colorDimFg).Render(c.Duration)
+			}
+			detail := ""
+			if c.Detail != "" {
+				detail = "  " + lipgloss.NewStyle().Foreground(colorDimFg).Italic(true).
+					Render(truncateMiddle(c.Detail, innerWidth-40))
+			}
+			bodyLines = append(bodyLines, fmt.Sprintf("  %s %s  %s%s%s", icon, name, status, dur, detail))
+		}
+	}
+
+	// Reviews section.
+	if len(pr.Reviews) > 0 {
+		bodyLines = append(bodyLines, sep)
+		bodyLines = append(bodyLines, styleSectionLabel.Render("── Reviews"))
+		for _, r := range pr.Reviews {
+			icon := reviewIcon(r.State)
+			author := lipgloss.NewStyle().Foreground(colorFg).Render("@" + r.Author)
+			state := lipgloss.NewStyle().Foreground(colorDimFg).Render(strings.ToLower(r.State))
+			body := ""
+			if r.Body != "" {
+				bodyTrunc := r.Body
+				if len(bodyTrunc) > 50 {
+					bodyTrunc = bodyTrunc[:50] + "…"
+				}
+				body = "  " + lipgloss.NewStyle().Foreground(colorDimFg).Italic(true).
+					Render("\""+bodyTrunc+"\"")
+			}
+			at := ""
+			if r.At != "" {
+				at = "  " + lipgloss.NewStyle().Foreground(colorSubtle).Render(r.At)
+			}
+			bodyLines = append(bodyLines, fmt.Sprintf("  %s %s  %s%s%s", icon, author, state, body, at))
+		}
+	}
+
+	// Timeline section.
+	if len(pr.Timeline) > 0 {
+		bodyLines = append(bodyLines, sep)
+		bodyLines = append(bodyLines, styleSectionLabel.Render("── Timeline"))
+		for _, ev := range pr.Timeline {
+			ts := lipgloss.NewStyle().Foreground(colorSubtle).Render(ev.Time.Format("15:04"))
+			icon := ev.Icon
+			msg := lipgloss.NewStyle().Foreground(colorDimFg).Render(ev.Message)
+			bodyLines = append(bodyLines, fmt.Sprintf("  %s  %s  %s", ts, icon, msg))
+		}
+	}
+
+	// URL.
+	bodyLines = append(bodyLines, sep)
+	bodyLines = append(bodyLines, "  "+lipgloss.NewStyle().Foreground(colorAccent).Underline(true).
+		Render(pr.URL))
+
+	// Scroll + clip.
+	maxScroll := len(bodyLines) - bodyHeight
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scrollOffset > maxScroll {
+		scrollOffset = maxScroll
+	}
+
+	visibleBody := bodyLines
+	if scrollOffset > 0 && scrollOffset < len(visibleBody) {
+		visibleBody = visibleBody[scrollOffset:]
+	}
+	if len(visibleBody) > bodyHeight {
+		visibleBody = visibleBody[:bodyHeight]
+	}
+
+	// Scroll indicator.
+	if maxScroll > 0 {
+		scrollInfo := lipgloss.NewStyle().Foreground(colorDimFg)
+		if scrollOffset > 0 {
+			headerLines[len(headerLines)-1] += scrollInfo.Render(
+				fmt.Sprintf(" ↑↓ %d%%", scrollOffset*100/maxScroll))
+		} else {
+			headerLines[len(headerLines)-1] += scrollInfo.Render(" ↓ scroll")
+		}
+	}
+
+	// Assemble.
+	all := append(headerLines, visibleBody...)
+	if len(all) > height {
+		all = all[:height]
+	}
+	for len(all) < height {
+		all = append(all, "")
+	}
+
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(all, "\n"))
+}
+
+func prStateColor(state string) lipgloss.TerminalColor {
+	switch state {
+	case "checks_failing":
+		return colorDestructive
+	case "checks_running":
+		return colorWaiting
+	case "checks_passing":
+		return colorRunning
+	case "approved":
+		return colorRunning
+	case "merged":
+		return lipgloss.ANSIColor(5) // magenta
+	default:
+		return colorDimFg
+	}
+}
+
+func prStateLabel(state string) string {
+	switch state {
+	case "checks_failing":
+		return "FAILING"
+	case "checks_running":
+		return "RUNNING"
+	case "checks_passing":
+		return "PASSING"
+	case "approved":
+		return "APPROVED"
+	case "merged":
+		return "MERGED"
+	case "closed":
+		return "CLOSED"
+	default:
+		return strings.ToUpper(state)
+	}
+}
+
+func checkIcon(c client.PRCheck) string {
+	switch c.Conclusion {
+	case "SUCCESS":
+		return styleSafe.Render("✓")
+	case "FAILURE":
+		return styleDestructive.Render("✗")
+	case "NEUTRAL":
+		return lipgloss.NewStyle().Foreground(colorDimFg).Render("○")
+	default:
+		if c.Status == "IN_PROGRESS" || c.Status == "QUEUED" {
+			return lipgloss.NewStyle().Foreground(colorWaiting).Render("⏳")
+		}
+		return "•"
+	}
+}
+
+func checkStatusText(c client.PRCheck) string {
+	switch c.Conclusion {
+	case "SUCCESS":
+		return styleSafe.Render("passed")
+	case "FAILURE":
+		return styleDestructive.Render("failed")
+	case "NEUTRAL":
+		return lipgloss.NewStyle().Foreground(colorDimFg).Render("neutral")
+	default:
+		if c.Status == "IN_PROGRESS" {
+			return lipgloss.NewStyle().Foreground(colorWaiting).Render("running")
+		}
+		if c.Status == "QUEUED" {
+			return lipgloss.NewStyle().Foreground(colorDimFg).Render("queued")
+		}
+		return c.Status
+	}
+}
+
+func reviewIcon(state string) string {
+	switch state {
+	case "APPROVED":
+		return styleSafe.Render("✓")
+	case "CHANGES_REQUESTED":
+		return styleDestructive.Render("✗")
+	case "COMMENTED":
+		return lipgloss.NewStyle().Foreground(colorAccent).Render("💬")
+	default:
+		return lipgloss.NewStyle().Foreground(colorWaiting).Render("⏳")
+	}
+}
+
+// Suppress unused import warning.
+var _ = time.Now
