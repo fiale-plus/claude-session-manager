@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/pchaganti/claude-session-manager/daemon/internal/model"
+	"github.com/pchaganti/claude-session-manager/daemon/internal/pr"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/state"
 )
 
@@ -296,5 +298,271 @@ func TestMultipleActions(t *testing.T) {
 	}
 	if resp.Sessions[0].AutopilotMode != model.AutopilotOn {
 		t.Errorf("autopilot = %q, want on", resp.Sessions[0].AutopilotMode)
+	}
+}
+
+// --- PR handler setup ---
+
+func setupHandlerWithPR(t *testing.T) (*state.Manager, *pr.Poller, net.Conn) {
+	t.Helper()
+	st := newTestState(t)
+	storePath := filepath.Join(t.TempDir(), "prs.json")
+	prPoll := pr.NewPoller(storePath, nil)
+	h := NewHandler(st, prPoll)
+
+	server, client := net.Pipe()
+	go h.Handle(server)
+	client.SetDeadline(time.Now().Add(5 * time.Second))
+
+	return st, prPoll, client
+}
+
+// --- add_pr ---
+
+func TestHandleAddPR(t *testing.T) {
+	_, _, conn := setupHandlerWithPR(t)
+	defer conn.Close()
+
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "add_pr",
+		PRURL:  "https://github.com/octocat/hello-world/pull/42",
+	})
+	if resp.OK == nil || !*resp.OK {
+		t.Error("expected ok=true for add_pr")
+	}
+}
+
+func TestHandleAddPR_InvalidURL(t *testing.T) {
+	_, _, conn := setupHandlerWithPR(t)
+	defer conn.Close()
+
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "add_pr",
+		PRURL:  "not a valid url",
+	})
+	if resp.OK == nil || *resp.OK {
+		t.Error("expected ok=false for invalid URL")
+	}
+}
+
+func TestHandleAddPR_NoPRPoller(t *testing.T) {
+	// Use handler without PR poller.
+	_, conn := setupHandler(t)
+	defer conn.Close()
+
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "add_pr",
+		PRURL:  "https://github.com/owner/repo/pull/1",
+	})
+	if resp.OK == nil || *resp.OK {
+		t.Error("expected ok=false when no PR poller")
+	}
+}
+
+// --- remove_pr ---
+
+func TestHandleRemovePR(t *testing.T) {
+	_, prPoll, conn := setupHandlerWithPR(t)
+	defer conn.Close()
+
+	// First add a PR directly.
+	prPoll.Add("owner", "repo", 1)
+
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "remove_pr",
+		PRKey:  "owner/repo#1",
+	})
+	if resp.OK == nil || !*resp.OK {
+		t.Error("expected ok=true for remove_pr")
+	}
+
+	// Verify it was removed.
+	all := prPoll.GetAll()
+	if len(all) != 0 {
+		t.Errorf("after remove: got %d PRs, want 0", len(all))
+	}
+}
+
+func TestHandleRemovePR_InvalidKey(t *testing.T) {
+	_, _, conn := setupHandlerWithPR(t)
+	defer conn.Close()
+
+	// No # separator.
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "remove_pr",
+		PRKey:  "invalid-key",
+	})
+	if resp.OK == nil || *resp.OK {
+		t.Error("expected ok=false for invalid key (no #)")
+	}
+}
+
+func TestHandleRemovePR_InvalidKeyNoSlash(t *testing.T) {
+	_, _, conn := setupHandlerWithPR(t)
+	defer conn.Close()
+
+	// # present but no / in owner/repo part.
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "remove_pr",
+		PRKey:  "ownerrepo#1",
+	})
+	if resp.OK == nil || *resp.OK {
+		t.Error("expected ok=false for invalid key (no /)")
+	}
+}
+
+func TestHandleRemovePR_NoPRPoller(t *testing.T) {
+	_, conn := setupHandler(t)
+	defer conn.Close()
+
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "remove_pr",
+		PRKey:  "owner/repo#1",
+	})
+	if resp.OK == nil || *resp.OK {
+		t.Error("expected ok=false when no PR poller")
+	}
+}
+
+// --- cycle_pr_autopilot ---
+
+func TestHandleCyclePRAutopilot(t *testing.T) {
+	_, prPoll, conn := setupHandlerWithPR(t)
+	defer conn.Close()
+
+	prPoll.Add("owner", "repo", 1) // Starts at auto.
+
+	// auto -> yolo
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "cycle_pr_autopilot",
+		PRKey:  "owner/repo#1",
+	})
+	if resp.OK == nil || !*resp.OK {
+		t.Error("expected ok=true")
+	}
+	if resp.AutopilotMode != "yolo" {
+		t.Errorf("mode = %q, want yolo", resp.AutopilotMode)
+	}
+
+	// yolo -> off
+	resp = sendAndReceive(t, conn, ctlRequest{
+		Action: "cycle_pr_autopilot",
+		PRKey:  "owner/repo#1",
+	})
+	if resp.AutopilotMode != "off" {
+		t.Errorf("mode = %q, want off", resp.AutopilotMode)
+	}
+
+	// off -> auto
+	resp = sendAndReceive(t, conn, ctlRequest{
+		Action: "cycle_pr_autopilot",
+		PRKey:  "owner/repo#1",
+	})
+	if resp.AutopilotMode != "auto" {
+		t.Errorf("mode = %q, want auto", resp.AutopilotMode)
+	}
+}
+
+func TestHandleCyclePRAutopilot_NonexistentPR(t *testing.T) {
+	_, _, conn := setupHandlerWithPR(t)
+	defer conn.Close()
+
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "cycle_pr_autopilot",
+		PRKey:  "owner/repo#999",
+	})
+	if resp.OK == nil || *resp.OK {
+		t.Error("expected ok=false for nonexistent PR")
+	}
+}
+
+func TestHandleCyclePRAutopilot_InvalidKey(t *testing.T) {
+	_, _, conn := setupHandlerWithPR(t)
+	defer conn.Close()
+
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "cycle_pr_autopilot",
+		PRKey:  "badkey",
+	})
+	if resp.OK == nil || *resp.OK {
+		t.Error("expected ok=false for invalid key")
+	}
+}
+
+func TestHandleCyclePRAutopilot_NoPRPoller(t *testing.T) {
+	_, conn := setupHandler(t)
+	defer conn.Close()
+
+	resp := sendAndReceive(t, conn, ctlRequest{
+		Action: "cycle_pr_autopilot",
+		PRKey:  "owner/repo#1",
+	})
+	if resp.OK == nil || *resp.OK {
+		t.Error("expected ok=false when no PR poller")
+	}
+}
+
+// --- list includes PRs ---
+
+func TestHandleList_IncludesPRs(t *testing.T) {
+	_, prPoll, conn := setupHandlerWithPR(t)
+	defer conn.Close()
+
+	prPoll.Add("octocat", "hello-world", 42)
+	prPoll.Add("owner", "repo", 7)
+
+	resp := sendAndReceive(t, conn, ctlRequest{Action: "list"})
+	if len(resp.PRs) != 2 {
+		t.Errorf("list: got %d PRs, want 2", len(resp.PRs))
+	}
+}
+
+func TestHandleList_NilPRPoller(t *testing.T) {
+	_, conn := setupHandler(t) // No PR poller.
+	defer conn.Close()
+
+	resp := sendAndReceive(t, conn, ctlRequest{Action: "list"})
+	if len(resp.PRs) != 0 {
+		t.Errorf("nil poller: got %d PRs, want 0", len(resp.PRs))
+	}
+}
+
+// --- subscribe includes PRs ---
+
+func TestHandleSubscribe_IncludesPRs(t *testing.T) {
+	st := newTestState(t)
+	storePath := filepath.Join(t.TempDir(), "prs.json")
+	prPoll := pr.NewPoller(storePath, func() {
+		st.NotifySubscribers()
+	})
+	h := NewHandler(st, prPoll)
+
+	server, client := net.Pipe()
+	go h.Handle(server)
+	client.SetDeadline(time.Now().Add(5 * time.Second))
+	defer client.Close()
+
+	// Add a PR before subscribing.
+	prPoll.Add("owner", "repo", 1)
+
+	// Send subscribe.
+	data, _ := json.Marshal(ctlRequest{Action: "subscribe"})
+	data = append(data, '\n')
+	client.Write(data)
+
+	// Read the initial state snapshot.
+	scanner := bufio.NewScanner(client)
+	if !scanner.Scan() {
+		t.Fatal("no initial snapshot")
+	}
+	var resp ctlResponse
+	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Event != "state_updated" {
+		t.Errorf("event = %q, want state_updated", resp.Event)
+	}
+	if len(resp.PRs) != 1 {
+		t.Errorf("subscribe snapshot: got %d PRs, want 1", len(resp.PRs))
 	}
 }
