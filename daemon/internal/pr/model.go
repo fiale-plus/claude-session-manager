@@ -61,10 +61,85 @@ type TrackedPR struct {
 	Timeline   []PREvent `json:"timeline"`
 
 	// Tracking config
-	AutoMerge   bool   `json:"auto_merge"`
-	Hammer      bool   `json:"hammer"`      // auto-fix CI failures
-	HammerCount int    `json:"hammer_count"` // fix attempts so far
-	MergeMethod string `json:"merge_method"` // "squash", "merge", "rebase"
+	AutopilotMode string `json:"autopilot_mode"` // "off", "auto", "yolo"
+	Hammer        bool   `json:"hammer"`          // auto-fix CI failures
+	HammerCount   int    `json:"hammer_count"`    // fix attempts so far
+	MaxHammer     int    `json:"max_hammer"`      // max fix attempts (default 3)
+	MergeMethod   string `json:"merge_method"`    // "squash", "merge", "rebase", "aviator"
+	RunReview     bool   `json:"run_review"`      // run code-review skill on creation
+}
+
+// PR autopilot modes.
+const (
+	PRAuto = "auto" // hammer CI + auto-merge on approval + green checks
+	PRYolo = "yolo" // auto mode + auto-approve (no human review needed)
+	PROff  = "off"  // manual everything
+)
+
+// ShouldAutoMerge returns true if the PR should be auto-merged now.
+func (pr *TrackedPR) ShouldAutoMerge() bool {
+	if pr.AutopilotMode == PROff {
+		return false
+	}
+	if pr.State == StateMerged || pr.State == StateClosed {
+		return false
+	}
+	if pr.Mergeable != "MERGEABLE" {
+		return false
+	}
+
+	// All checks must pass (ignore still-running ones).
+	for _, c := range pr.Checks {
+		if c.Conclusion == "FAILURE" {
+			return false
+		}
+	}
+	// At least one check must have completed.
+	hasCompleted := false
+	for _, c := range pr.Checks {
+		if c.Status == "COMPLETED" {
+			hasCompleted = true
+			break
+		}
+	}
+	if !hasCompleted {
+		return false
+	}
+
+	// Check approval.
+	hasApproval := false
+	for _, r := range pr.Reviews {
+		if r.State == "APPROVED" {
+			hasApproval = true
+			break
+		}
+	}
+
+	if pr.AutopilotMode == PRYolo {
+		// YOLO doesn't need human approval.
+		return true
+	}
+
+	// AUTO needs at least one approval.
+	return hasApproval
+}
+
+// ShouldHammer returns true if the daemon should spawn a fix-CI agent.
+func (pr *TrackedPR) ShouldHammer() bool {
+	if !pr.Hammer {
+		return false
+	}
+	if pr.AutopilotMode == PROff {
+		return false
+	}
+	maxAttempts := pr.MaxHammer
+	if maxAttempts == 0 {
+		maxAttempts = 3
+	}
+	if pr.HammerCount >= maxAttempts {
+		return false
+	}
+	return pr.HasFailingChecks()
 }
 
 // ChecksSummary returns (passing, total) counts.

@@ -64,9 +64,9 @@ type TrackedPR struct {
 	Additions   int       `json:"additions"`
 	Deletions   int       `json:"deletions"`
 	CommitCount int       `json:"commit_count"`
-	AutoMerge   bool      `json:"auto_merge"`
-	Hammer      bool      `json:"hammer"`
-	HammerCount int       `json:"hammer_count"`
+	AutopilotMode string   `json:"autopilot_mode"`
+	Hammer        bool     `json:"hammer"`
+	HammerCount   int      `json:"hammer_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	Timeline    []PREvent `json:"timeline"`
 }
@@ -104,6 +104,8 @@ type serverEvent struct {
 type request struct {
 	Action    string `json:"action"`
 	SessionID string `json:"session_id,omitempty"`
+	PRURL     string `json:"pr_url,omitempty"`
+	PRKey     string `json:"pr_key,omitempty"`
 }
 
 // Client manages the connection to the CSM daemon.
@@ -218,6 +220,21 @@ func (c *Client) Reject(sessionID string) error {
 // ApproveAll approves all non-destructive pending tools across all sessions.
 func (c *Client) ApproveAll() error {
 	return c.sendCommand(request{Action: "approve_all"})
+}
+
+// AddPR adds a PR to tracking by URL.
+func (c *Client) AddPR(url string) error {
+	return c.sendCommand(request{Action: "add_pr", PRURL: url})
+}
+
+// RemovePR removes a PR from tracking by key (owner/repo#number).
+func (c *Client) RemovePR(key string) error {
+	return c.sendCommand(request{Action: "remove_pr", PRKey: key})
+}
+
+// CyclePRAutopilot cycles PR autopilot: off → auto → yolo → off.
+func (c *Client) CyclePRAutopilot(key string) error {
+	return c.sendCommand(request{Action: "cycle_pr_autopilot", PRKey: key})
 }
 
 // Focus focuses the Ghostty tab for the given session.

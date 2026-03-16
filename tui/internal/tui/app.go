@@ -45,7 +45,8 @@ type Model struct {
 	selectedIdx  int
 	// Total items in strip = len(sessions) + len(prs).
 	// Index 0..len(sessions)-1 = sessions, len(sessions)..end = PRs.
-	selectedSID  string // stable selection tracking by session ID
+	selectedSID    string // stable selection tracking by session ID
+	selectedPRKey  string // stable selection tracking by PR key (owner/repo#N)
 	queueVisible bool
 	helpVisible  bool
 	connected    bool
@@ -55,6 +56,10 @@ type Model struct {
 	flashStyle   lipgloss.Style
 	glowPos      int
 	glowDir      int // 1 or -1 for ping-pong
+	inputMode          bool              // text input active (for + add PR)
+	inputBuffer        string            // text being typed
+	mergePickerVisible bool              // merge strategy picker showing
+	mergePickerPR      *client.TrackedPR // PR being merged
 	scrollOffset int // scroll position in zoom body
 }
 
@@ -174,10 +179,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateMsg:
 		m.sessions = msg.Sessions
 		m.prs = msg.PRs
-		// Restore selection by session ID to prevent jumping.
+		// Restore selection by ID to prevent jumping.
 		totalItems := len(m.sessions) + len(m.prs)
-		if m.selectedSID != "" {
-			found := false
+		found := false
+		if m.selectedPRKey != "" {
+			// Selected item was a PR — find it by key.
+			for i, p := range m.prs {
+				key := fmt.Sprintf("%s/%s#%d", p.Owner, p.Repo, p.Number)
+				if key == m.selectedPRKey {
+					m.selectedIdx = len(m.sessions) + i
+					found = true
+					break
+				}
+			}
+		} else if m.selectedSID != "" {
+			// Selected item was a session — find by ID.
 			for i, s := range m.sessions {
 				if s.SessionID == m.selectedSID {
 					m.selectedIdx = i
@@ -185,12 +201,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			if !found {
-				if m.selectedIdx >= totalItems {
-					m.selectedIdx = max(0, totalItems-1)
-				}
-			}
-		} else if m.selectedIdx >= totalItems {
+		}
+		if !found && m.selectedIdx >= totalItems {
 			m.selectedIdx = max(0, totalItems-1)
 		}
 		return m, waitForUpdate
@@ -214,6 +226,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Text input mode (for + add PR).
+	if m.inputMode {
+		switch msg.String() {
+		case "enter":
+			url := strings.TrimSpace(m.inputBuffer)
+			m.inputMode = false
+			m.inputBuffer = ""
+			if url != "" {
+				return m, func() tea.Msg {
+					err := m.client.AddPR(url)
+					if err != nil {
+						return actionResultMsg{action: "add PR", err: err}
+					}
+					return actionResultMsg{action: "added PR"}
+				}
+			}
+			return m, nil
+		case "esc":
+			m.inputMode = false
+			m.inputBuffer = ""
+			return m, nil
+		case "backspace":
+			if len(m.inputBuffer) > 0 {
+				m.inputBuffer = m.inputBuffer[:len(m.inputBuffer)-1]
+			}
+			return m, nil
+		default:
+			if len(msg.String()) == 1 {
+				m.inputBuffer += msg.String()
+			}
+			return m, nil
+		}
+	}
+
 	switch msg.String() {
 	case "q":
 		if m.queueVisible || m.helpVisible {
@@ -230,19 +276,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selectedIdx > 0 {
 			m.selectedIdx--
 			m.scrollOffset = 0
-			if m.selectedIdx < len(m.sessions) {
-				m.selectedSID = m.sessions[m.selectedIdx].SessionID
-			}
+			m.trackSelection()
 		}
 		return m, nil
 
 	case "right", "l":
 		if m.selectedIdx < m.totalItems()-1 {
 			m.selectedIdx++
-			m.scrollOffset = 0 // reset scroll on session change
-			if m.selectedIdx < len(m.sessions) {
-				m.selectedSID = m.sessions[m.selectedIdx].SessionID
-			}
+			m.scrollOffset = 0
+			m.trackSelection()
 		}
 		return m, nil
 
@@ -260,7 +302,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selectedIdx = 0
 		m.scrollOffset = 0
 		if len(m.sessions) > 0 {
-			m.selectedSID = m.sessions[0].SessionID
+			m.trackSelection()
 		}
 		return m, nil
 
@@ -268,7 +310,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.sessions) > 0 {
 			m.selectedIdx = len(m.sessions) - 1
 			m.scrollOffset = 0
-			m.selectedSID = m.sessions[m.selectedIdx].SessionID
+			m.trackSelection()
 		}
 		return m, nil
 
@@ -289,10 +331,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "a":
 		if sel := m.selected(); sel != nil {
+			// Session autopilot.
 			sid := sel.SessionID
 			return m, func() tea.Msg {
 				err := m.client.ToggleAutopilot(sid)
 				return actionResultMsg{action: "autopilot toggle", err: err}
+			}
+		} else if pr := m.selectedPR(); pr != nil {
+			// PR autopilot: off → auto → yolo → off.
+			key := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+			return m, func() tea.Msg {
+				err := m.client.CyclePRAutopilot(key)
+				return actionResultMsg{action: "PR autopilot", err: err}
 			}
 		}
 
@@ -344,8 +394,124 @@ end tell`, tabIdx, tabIdx)
 			return actionResultMsg{action: "approve all", err: err}
 		}
 
+	case "+", "=":
+		// Add PR — enter input mode.
+		m.inputMode = true
+		m.inputBuffer = ""
+		return m, nil
+
+	case "-":
+		// Remove selected PR from tracking.
+		if pr := m.selectedPR(); pr != nil {
+			key := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+			return m, func() tea.Msg {
+				err := m.client.RemovePR(key)
+				return actionResultMsg{action: "removed PR", err: err}
+			}
+		}
+
+	case "o":
+		// Open PR in browser.
+		if pr := m.selectedPR(); pr != nil {
+			url := pr.URL
+			return m, func() tea.Msg {
+				err := exec.Command("open", url).Run()
+				return actionResultMsg{action: "opened PR", err: err}
+			}
+		}
+
+	case "m":
+		// Merge selected PR — show merge strategy picker.
+		if pr := m.selectedPR(); pr != nil {
+			m.mergePickerPR = pr
+			m.mergePickerVisible = true
+			return m, nil
+		}
+
+	case "1":
+		// Merge picker: squash automerge.
+		if m.mergePickerVisible && m.mergePickerPR != nil {
+			pr := m.mergePickerPR
+			m.mergePickerVisible = false
+			m.mergePickerPR = nil
+			owner, repo, number := pr.Owner, pr.Repo, pr.Number
+			return m, func() tea.Msg {
+				err := exec.Command("gh", "pr", "merge",
+					fmt.Sprintf("%d", number),
+					"--repo", fmt.Sprintf("%s/%s", owner, repo),
+					"--squash", "--auto").Run()
+				if err != nil {
+					return actionResultMsg{action: "squash merge", err: err}
+				}
+				return actionResultMsg{action: "squash automerge enabled"}
+			}
+		}
+
+	case "2":
+		// Merge picker: rebase automerge.
+		if m.mergePickerVisible && m.mergePickerPR != nil {
+			pr := m.mergePickerPR
+			m.mergePickerVisible = false
+			m.mergePickerPR = nil
+			owner, repo, number := pr.Owner, pr.Repo, pr.Number
+			return m, func() tea.Msg {
+				err := exec.Command("gh", "pr", "merge",
+					fmt.Sprintf("%d", number),
+					"--repo", fmt.Sprintf("%s/%s", owner, repo),
+					"--rebase", "--auto").Run()
+				if err != nil {
+					return actionResultMsg{action: "rebase merge", err: err}
+				}
+				return actionResultMsg{action: "rebase automerge enabled"}
+			}
+		}
+
+	case "3":
+		// Merge picker: Aviator merge queue.
+		if m.mergePickerVisible && m.mergePickerPR != nil {
+			pr := m.mergePickerPR
+			m.mergePickerVisible = false
+			m.mergePickerPR = nil
+			owner, repo, number := pr.Owner, pr.Repo, pr.Number
+			return m, func() tea.Msg {
+				err := exec.Command("gh", "pr", "comment",
+					fmt.Sprintf("%d", number),
+					"--repo", fmt.Sprintf("%s/%s", owner, repo),
+					"--body", "/aviator merge").Run()
+				if err != nil {
+					return actionResultMsg{action: "aviator merge", err: err}
+				}
+				return actionResultMsg{action: "aviator merge queued"}
+			}
+		}
+
+	case "4":
+		// Merge picker: merge commit automerge.
+		if m.mergePickerVisible && m.mergePickerPR != nil {
+			pr := m.mergePickerPR
+			m.mergePickerVisible = false
+			m.mergePickerPR = nil
+			owner, repo, number := pr.Owner, pr.Repo, pr.Number
+			return m, func() tea.Msg {
+				err := exec.Command("gh", "pr", "merge",
+					fmt.Sprintf("%d", number),
+					"--repo", fmt.Sprintf("%s/%s", owner, repo),
+					"--merge", "--auto").Run()
+				if err != nil {
+					return actionResultMsg{action: "merge commit", err: err}
+				}
+				return actionResultMsg{action: "merge commit automerge enabled"}
+			}
+		}
+
 	case "esc":
-		if m.helpVisible {
+		if m.mergePickerVisible {
+			m.mergePickerVisible = false
+			m.mergePickerPR = nil
+		} else if m.inputMode {
+			m.inputMode = false
+			m.inputBuffer = ""
+		} else if m.helpVisible {
 			m.helpVisible = false
 		} else if m.queueVisible {
 			m.queueVisible = false
@@ -403,6 +569,23 @@ func (m Model) totalItems() int {
 	return len(m.sessions) + len(m.prs)
 }
 
+// trackSelection updates selectedSID/selectedPRKey based on current selectedIdx.
+func (m *Model) trackSelection() {
+	if m.selectedIdx < len(m.sessions) {
+		if m.selectedIdx >= 0 && m.selectedIdx < len(m.sessions) {
+			m.selectedSID = m.sessions[m.selectedIdx].SessionID
+			m.selectedPRKey = ""
+		}
+	} else {
+		prIdx := m.selectedIdx - len(m.sessions)
+		if prIdx >= 0 && prIdx < len(m.prs) {
+			p := m.prs[prIdx]
+			m.selectedPRKey = fmt.Sprintf("%s/%s#%d", p.Owner, p.Repo, p.Number)
+			m.selectedSID = ""
+		}
+	}
+}
+
 // View renders the entire TUI.
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
@@ -427,14 +610,42 @@ func (m Model) View() string {
 
 	bottomHeight := stripHeight + hintsHeight
 
-	// Status bar.
-	failingPRs := 0
-	for _, p := range m.prs {
-		if p.State == "checks_failing" {
-			failingPRs++
-		}
+	// Merge strategy picker overlay.
+	if m.mergePickerVisible && m.mergePickerPR != nil {
+		pr := m.mergePickerPR
+		picker := lipgloss.NewStyle().Padding(1, 2).Render(
+			styleZoomHeader.Render(fmt.Sprintf("  Merge #%d %s\n", pr.Number, pr.Title)) + "\n" +
+				lipgloss.NewStyle().Foreground(colorFg).Render(
+					"  [1] Squash automerge\n"+
+						"  [2] Rebase automerge\n"+
+						"  [3] Aviator merge queue\n"+
+						"  [4] Merge commit automerge\n"+
+						"  [Esc] Cancel"))
+
+		return lipgloss.JoinVertical(lipgloss.Left,
+			picker,
+			lipgloss.NewStyle().Width(w).Height(m.height-lipgloss.Height(picker)-stripHeight).Render(""),
+			strip,
+		)
 	}
-	statusLine := renderStatusBar(m.connected, m.sessions, m.prs, failingPRs, m.flash, m.flashStyle, w)
+
+	// Status bar (or input bar when in input mode).
+	var statusLine string
+	if m.inputMode {
+		inputStyle := lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+		cursorStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+		statusLine = inputStyle.Render("  Add PR: ") + m.inputBuffer + cursorStyle.Render("█") +
+			lipgloss.NewStyle().Foreground(colorDimFg).Render("  (Enter add, Esc cancel)") + "\n" +
+			lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", w))
+	} else {
+		failingPRs := 0
+		for _, p := range m.prs {
+			if p.State == "checks_failing" {
+				failingPRs++
+			}
+		}
+		statusLine = renderStatusBar(m.connected, m.sessions, m.prs, failingPRs, m.flash, m.flashStyle, w)
+	}
 	statusHeight := lipgloss.Height(statusLine)
 
 	remainingHeight := m.height - bottomHeight - statusHeight
