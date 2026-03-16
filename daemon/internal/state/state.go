@@ -248,6 +248,23 @@ func (m *Manager) ResolvePending(sid string, decision model.ApprovalDecision) bo
 	return true
 }
 
+// ClearPending removes the pending approval and clears PendingTools on a session.
+// Called when a hook times out to prevent stale pending state.
+func (m *Manager) ClearPending(sid string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if pa, ok := m.pending[sid]; ok {
+		close(pa.ResponseCh)
+		delete(m.pending, sid)
+	}
+	if s, ok := m.sessions[sid]; ok {
+		s.PendingTools = nil
+		s.HasDestructive = false
+	}
+	m.notifySubscribers()
+}
+
 // ShouldAutoApprove checks if autopilot should auto-approve a tool for this session.
 // Returns: approve immediately, or "grace" for YOLO destructive (delayed approve).
 func (m *Manager) ShouldAutoApprove(sid string, safety model.ToolSafety) (bool, bool) {

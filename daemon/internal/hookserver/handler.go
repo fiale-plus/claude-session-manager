@@ -164,6 +164,8 @@ func (h *Handler) handlePreToolUse(req hookRequest) hookResponse {
 		}
 	case <-time.After(60 * time.Second):
 		// Timeout — passthrough to CC's default permission logic.
+		// Clean up the pending entry so it doesn't go stale.
+		h.state.ClearPending(req.SessionID)
 		log.Printf("hook: timeout waiting for decision on %s (60s)", req.ToolName)
 		return hookResponse{}
 	}

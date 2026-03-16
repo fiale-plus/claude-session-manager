@@ -248,9 +248,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.inputBuffer = m.inputBuffer[:len(m.inputBuffer)-1]
 			}
 			return m, nil
+		case "ctrl+u":
+			// Clear entire input.
+			m.inputBuffer = ""
+			return m, nil
+		case "ctrl+w":
+			// Delete last word.
+			buf := strings.TrimRight(m.inputBuffer, " ")
+			if idx := strings.LastIndexByte(buf, ' '); idx >= 0 {
+				m.inputBuffer = buf[:idx+1]
+			} else {
+				m.inputBuffer = ""
+			}
+			return m, nil
 		default:
-			if len(msg.String()) == 1 {
-				m.inputBuffer += msg.String()
+			// Accept printable characters and pasted multi-char strings.
+			s := msg.String()
+			for _, r := range s {
+				if r >= 32 && r != 127 { // printable, non-control
+					m.inputBuffer += string(r)
+				}
 			}
 			return m, nil
 		}
@@ -373,10 +390,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "enter", "return":
-		if sel := m.selected(); sel != nil && sel.GhosttyTabIndex > 0 {
+		// Session: focus Ghostty tab. PR: open in browser.
+		if pr := m.selectedPR(); pr != nil {
+			url := pr.URL
+			return m, func() tea.Msg {
+				err := exec.Command("open", url).Run()
+				return actionResultMsg{action: "opened PR", err: err}
+			}
+		} else if sel := m.selected(); sel != nil && sel.GhosttyTabIndex > 0 {
 			tabIdx := sel.GhosttyTabIndex
 			return m, func() tea.Msg {
-				// Switch by tab index — stable unlike names with animated spinners.
 				script := fmt.Sprintf(`tell application "System Events" to tell process "Ghostty"
     set tabGroup to tab group 1 of window 1
     set allButtons to every radio button of tabGroup
@@ -385,10 +408,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
     end if
 end tell`, tabIdx, tabIdx)
 				err := exec.Command("osascript", "-e", script).Run()
-				if err != nil {
-					return actionResultMsg{action: "focus", err: err}
-				}
-				return actionResultMsg{action: "focus"}
+				return actionResultMsg{action: "focus", err: err}
 			}
 		}
 
