@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/pchaganti/claude-session-manager/daemon/internal/pr"
 	"github.com/pchaganti/claude-session-manager/daemon/internal/state"
 )
 
@@ -43,6 +44,9 @@ func (s *HTTPServer) Serve() {
 }
 
 // Close stops the HTTP server.
+// SetPRPoller sets the PR poller for PostToolUse auto-detection.
+func (s *HTTPServer) SetPRPoller(p *pr.Poller) { s.handler.SetPRPoller(p) }
+
 func (s *HTTPServer) Close() error {
 	return s.server.Close()
 }
@@ -76,6 +80,8 @@ func (s *HTTPServer) handleHook(w http.ResponseWriter, r *http.Request) {
 		s.handler.handleSessionEnd(req)
 	case "PreToolUse":
 		resp = s.handler.handlePreToolUse(req)
+	case "PostToolUse":
+		s.handler.handlePostToolUse(req)
 	default:
 		log.Printf("http hook: unknown event: %s", req.HookEventName)
 	}

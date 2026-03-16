@@ -293,9 +293,15 @@ func sessionFromJSONL(jsonlPath string, pid int, tty string) *model.Session {
 		return nil
 	}
 
-	sessionID, slug, cwd, gitBranch := ExtractMetadata(entries)
+	sessionID, slug, cwd, gitBranch, customTitle := ExtractMetadata(entries)
 	if sessionID == "" {
 		sessionID = filepath.Base(strings.TrimSuffix(jsonlPath, ".jsonl"))
+	}
+
+	// Use customTitle from /rename as the slug if available.
+	// CC writes custom-title entries but never updates the slug field.
+	if customTitle != "" {
+		slug = customTitle
 	}
 
 	projectName := ""
