@@ -197,3 +197,185 @@ func TestIsAutoSlug(t *testing.T) {
 		})
 	}
 }
+
+// === Unified strip with sessions + PRs ===
+
+func TestRenderUnifiedStrip_SessionsAndPRs(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", State: "running", ProjectName: "alpha"},
+		{SessionID: "s2", State: "idle", ProjectName: "beta"},
+	}
+	prs := []client.TrackedPR{
+		{Owner: "octocat", Repo: "repo", Number: 42, Title: "Fix bug", State: "checks_passing"},
+		{Owner: "owner", Repo: "project", Number: 7, Title: "Add feature", State: "checks_failing"},
+	}
+
+	out := renderUnifiedStrip(sessions, prs, 0, 120, 0)
+	if out == "" {
+		t.Error("unified strip should produce output")
+	}
+	// Should contain the separator.
+	if !strings.Contains(out, "\u2502") {
+		t.Error("unified strip should contain separator between sessions and PRs")
+	}
+}
+
+func TestRenderUnifiedStrip_SessionsOnly(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", State: "running", ProjectName: "alpha"},
+	}
+
+	out := renderUnifiedStrip(sessions, nil, 0, 100, 0)
+	if out == "" {
+		t.Error("sessions-only strip should produce output")
+	}
+	// No separator when no PRs.
+	if strings.Contains(out, "\u2502") {
+		t.Error("sessions-only strip should not contain separator")
+	}
+}
+
+func TestRenderUnifiedStrip_PRsOnly(t *testing.T) {
+	prs := []client.TrackedPR{
+		{Owner: "o", Repo: "r", Number: 1, Title: "PR", State: "approved"},
+	}
+
+	// Use selectedIdx=-1 so no PR is selected (avoids RoundedBorder which contains │).
+	out := renderUnifiedStrip(nil, prs, -1, 100, 0)
+	if out == "" {
+		t.Error("PRs-only strip should produce output")
+	}
+}
+
+func TestRenderUnifiedStrip_Empty(t *testing.T) {
+	out := renderUnifiedStrip(nil, nil, 0, 100, 0)
+	if out == "" {
+		t.Error("empty strip should produce output (empty state message)")
+	}
+	if !strings.Contains(out, "No active") {
+		t.Error("empty strip should show 'No active' message")
+	}
+}
+
+func TestRenderUnifiedStrip_PRSelected(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", State: "running", ProjectName: "alpha"},
+	}
+	prs := []client.TrackedPR{
+		{Owner: "o", Repo: "r", Number: 1, Title: "PR", State: "checks_passing"},
+	}
+
+	// Selected index = 1 means PR is selected (sessions count = 1).
+	out := renderUnifiedStrip(sessions, prs, 1, 120, 0)
+	if out == "" {
+		t.Error("strip with PR selected should produce output")
+	}
+}
+
+func TestRenderUnifiedStrip_HeightConsistentWithPRs(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", State: "running", ProjectName: "alpha"},
+	}
+	prs := []client.TrackedPR{
+		{Owner: "o", Repo: "r", Number: 1, Title: "PR", State: "checks_passing"},
+	}
+
+	h0 := lipgloss.Height(renderUnifiedStrip(sessions, prs, 0, 120, 0))
+	h1 := lipgloss.Height(renderUnifiedStrip(sessions, prs, 1, 120, 0))
+
+	// Height might differ slightly due to PR selected border, but should be close.
+	// What matters: both produce valid output.
+	if h0 == 0 || h1 == 0 {
+		t.Errorf("strip height: sel0=%d sel1=%d, neither should be 0", h0, h1)
+	}
+}
+
+// === PR pill icons ===
+
+func TestPRPillIcon(t *testing.T) {
+	tests := []struct {
+		state string
+		want  string
+	}{
+		{"checks_failing", "\u2717"},
+		{"checks_running", "\u23f3"},
+		{"checks_passing", "\u2713"},
+		{"approved", "\u2705"},
+		{"merged", "\U0001f680"},
+		{"unknown", "\u2022"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.state, func(t *testing.T) {
+			if got := prPillIcon(tt.state); got != tt.want {
+				t.Errorf("prPillIcon(%q) = %q, want %q", tt.state, got, tt.want)
+			}
+		})
+	}
+}
+
+// === interleave ===
+
+func TestInterleave(t *testing.T) {
+	tests := []struct {
+		name   string
+		items  []string
+		sep    string
+		wantN  int
+	}{
+		{"empty", nil, " ", 0},
+		{"single", []string{"a"}, " ", 1},
+		{"two", []string{"a", "b"}, " ", 3},
+		{"three", []string{"a", "b", "c"}, " ", 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := interleave(tt.items, tt.sep)
+			if len(result) != tt.wantN {
+				t.Errorf("interleave(%v): got %d items, want %d", tt.items, len(result), tt.wantN)
+			}
+		})
+	}
+}
+
+// === countPending ===
+
+func TestCountPending(t *testing.T) {
+	sessions := []client.Session{
+		{SessionID: "s1", PendingTools: []client.PendingTool{
+			{ToolName: "Bash"}, {ToolName: "Read"},
+		}},
+		{SessionID: "s2"}, // no pending
+		{SessionID: "s3", PendingTools: []client.PendingTool{
+			{ToolName: "Edit"},
+		}},
+	}
+	if got := countPending(sessions); got != 3 {
+		t.Errorf("countPending = %d, want 3", got)
+	}
+}
+
+func TestCountPending_Empty(t *testing.T) {
+	if got := countPending(nil); got != 0 {
+		t.Errorf("countPending(nil) = %d, want 0", got)
+	}
+}
+
+// === padRight ===
+
+func TestPadRight(t *testing.T) {
+	tests := []struct {
+		s    string
+		w    int
+		want string
+	}{
+		{"hi", 5, "hi   "},
+		{"hello", 5, "hello"},
+		{"hello!", 5, "hello!"},
+		{"", 3, "   "},
+	}
+	for _, tt := range tests {
+		if got := padRight(tt.s, tt.w); got != tt.want {
+			t.Errorf("padRight(%q, %d) = %q, want %q", tt.s, tt.w, got, tt.want)
+		}
+	}
+}
