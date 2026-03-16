@@ -198,7 +198,9 @@ func prStateColor(state string) lipgloss.TerminalColor {
 	case "approved":
 		return colorRunning
 	case "merged":
-		return lipgloss.ANSIColor(5) // magenta
+		return colorDimFg // dim gray — merged PRs should fade
+	case "closed":
+		return colorDimFg
 	default:
 		return colorDimFg
 	}

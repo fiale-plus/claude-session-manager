@@ -104,6 +104,14 @@ func TestRenderHints_PRSelectedNoSessionHints(t *testing.T) {
 	}
 }
 
+// TestRenderHints_PRSelectedShowsOpenPR verifies hint says "open PR" not just "open".
+func TestRenderHints_PRSelectedShowsOpenPR(t *testing.T) {
+	out := renderHints(false, false, true, 200)
+	if !strings.Contains(out, "open PR") {
+		t.Error("PR selected: hints should say 'open PR' not just 'open'")
+	}
+}
+
 // TestRenderHints_VeryNarrow ensures no panic at extremely narrow widths.
 func TestRenderHints_VeryNarrow(t *testing.T) {
 	for _, w := range []int{1, 5, 10, 15} {

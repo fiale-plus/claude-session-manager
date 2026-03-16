@@ -118,6 +118,18 @@ func TestPRStateColor_AllStates(t *testing.T) {
 	}
 }
 
+func TestPRStateColor_MergedIsDim(t *testing.T) {
+	// Merged PRs should use a dim color, not magenta.
+	mergedColor := prStateColor("merged")
+	if mergedColor == lipgloss.ANSIColor(5) { // magenta
+		t.Error("merged state should not use magenta — use dim color instead")
+	}
+	// Should be the dim foreground color.
+	if mergedColor != colorDimFg {
+		t.Errorf("merged state color should be colorDimFg, got %v", mergedColor)
+	}
+}
+
 // === Check icons and status text ===
 
 func TestCheckIcon(t *testing.T) {

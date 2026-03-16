@@ -82,11 +82,17 @@ func pillName(s client.Session) string {
 // renderPill renders a single session pill with state-colored background,
 // icon, name, and optional pending-tool count badge.
 func renderPill(s client.Session, selected bool, glowPos int) string {
+	return renderPillWithName(s, pillName(s), selected, glowPos)
+}
+
+// renderPillWithName renders a pill using a pre-computed display name
+// (which may include a disambiguator).
+func renderPillWithName(s client.Session, displayName string, selected bool, glowPos int) string {
 	sc := stateColor(s.State)
 	dimBg := stateColorDim(s.State)
 	icon := stateIcon(s.State)
 
-	name := truncateMiddle(pillName(s), 25)
+	name := truncateMiddle(displayName, 20)
 
 	label := icon + " " + name
 

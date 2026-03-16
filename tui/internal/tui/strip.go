@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -13,7 +14,41 @@ func renderStrip(sessions []client.Session, selectedIdx int, width int, glowPos 
 	return renderUnifiedStrip(sessions, nil, selectedIdx, width, glowPos)
 }
 
+// disambiguateNames detects duplicate pill names across sessions and appends
+// a short disambiguator (PID or session ID prefix) when names collide.
+func disambiguateNames(sessions []client.Session) map[string]string {
+	result := make(map[string]string, len(sessions))
+
+	// Count how many sessions share each name.
+	nameCounts := make(map[string]int)
+	for _, s := range sessions {
+		name := pillName(s)
+		nameCounts[name]++
+	}
+
+	// For duplicates, append disambiguator.
+	nameSeq := make(map[string]int)
+	for _, s := range sessions {
+		name := pillName(s)
+		if nameCounts[name] > 1 {
+			nameSeq[name]++
+			if s.PID > 0 {
+				result[s.SessionID] = fmt.Sprintf("%s:%d", name, s.PID)
+			} else if len(s.SessionID) >= 4 {
+				result[s.SessionID] = fmt.Sprintf("%s~%s", name, s.SessionID[:4])
+			} else {
+				result[s.SessionID] = fmt.Sprintf("%s#%d", name, nameSeq[name])
+			}
+		} else {
+			result[s.SessionID] = name
+		}
+	}
+	return result
+}
+
 // renderUnifiedStrip renders sessions + PRs in one strip with a separator.
+// It caps visible pills to fit within the given width, showing a "+N"
+// overflow indicator when pills are hidden.
 func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selectedIdx int, width int, glowPos int) string {
 	if len(sessions) == 0 && len(prs) == 0 {
 		emptyStyle := lipgloss.NewStyle().Foreground(colorDimFg).Italic(true)
@@ -21,22 +56,173 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 			emptyStyle.Render("  No active sessions or PRs"))
 	}
 
-	var pills []string
+	// Pre-compute disambiguated names for sessions.
+	nameMap := disambiguateNames(sessions)
 
-	// Session pills.
+	// Available width inside the strip bar (account for Padding(0,1) = 2 chars
+	// and the top border which doesn't affect horizontal space).
+	budget := width - 2
+	if budget < 10 {
+		budget = 10
+	}
+
+	type pillEntry struct {
+		rendered string
+		width    int
+		isSelected bool
+	}
+
+	// Build all pill entries.
+	var allPills []pillEntry
 	for i, s := range sessions {
-		pills = append(pills, renderPill(s, i == selectedIdx, glowPos))
+		p := renderPillWithName(s, nameMap[s.SessionID], i == selectedIdx, glowPos)
+		allPills = append(allPills, pillEntry{
+			rendered:   p,
+			width:      lipgloss.Width(p),
+			isSelected: i == selectedIdx,
+		})
 	}
 
 	// Separator between sessions and PRs.
-	if len(sessions) > 0 && len(prs) > 0 {
-		pills = append(pills, lipgloss.NewStyle().Foreground(colorBorder).Render("│"))
+	hasSep := len(sessions) > 0 && len(prs) > 0
+	sepStr := ""
+	sepWidth := 0
+	if hasSep {
+		sepStr = lipgloss.NewStyle().Foreground(colorBorder).Render("│")
+		sepWidth = lipgloss.Width(sepStr) + 2 // " │ " with surrounding spaces
 	}
 
-	// PR pills.
 	for i, p := range prs {
 		prIdx := len(sessions) + i
-		pills = append(pills, renderPRPill(p, prIdx == selectedIdx))
+		pill := renderPRPill(p, prIdx == selectedIdx)
+		allPills = append(allPills, pillEntry{
+			rendered:   pill,
+			width:      lipgloss.Width(pill),
+			isSelected: prIdx == selectedIdx,
+		})
+	}
+
+	// Fit pills within budget, always including the selected pill.
+	// Strategy: include pills left-to-right until budget exhausted.
+	// If selected pill would be excluded, shift the visible window.
+	overflowStyle := lipgloss.NewStyle().Foreground(colorDimFg).Bold(true)
+
+	spaceWidth := 1 // " " between pills
+	overflowBase := lipgloss.Width(overflowStyle.Render("+99"))
+
+	// Calculate which pills to show.
+	totalPills := len(allPills)
+	if totalPills == 0 {
+		return styleStripBar.Width(width).Render("")
+	}
+
+	// Find which range of pills fits, centered on the selected pill.
+	selectedPill := selectedIdx
+	// Account for the separator being in a different position:
+	// allPills has sessions then PRs (no separator entry).
+	// We insert separator visually, not as a pill.
+	if selectedPill < 0 {
+		selectedPill = 0
+	}
+	if selectedPill >= totalPills {
+		selectedPill = totalPills - 1
+	}
+
+	// Try to fit all pills first.
+	totalWidth := 0
+	for i, p := range allPills {
+		totalWidth += p.width
+		if i > 0 {
+			totalWidth += spaceWidth
+		}
+	}
+	if hasSep {
+		totalWidth += sepWidth
+	}
+
+	if totalWidth <= budget {
+		// Everything fits — render all.
+		var pills []string
+		for i, p := range allPills {
+			if hasSep && i == len(sessions) {
+				pills = append(pills, sepStr)
+			}
+			pills = append(pills, p.rendered)
+		}
+		row := lipgloss.JoinHorizontal(lipgloss.Center, interleave(pills, " ")...)
+		return styleStripBar.Width(width).Render(row)
+	}
+
+	// Not everything fits — build a visible window around the selected pill.
+	// Start with the selected pill and expand outward.
+	visStart := selectedPill
+	visEnd := selectedPill // inclusive
+
+	usedWidth := allPills[selectedPill].width
+
+	// Expand alternately left and right.
+	for {
+		expanded := false
+		// Try right.
+		if visEnd+1 < totalPills {
+			nextW := allPills[visEnd+1].width + spaceWidth
+			// Account for separator if crossing the boundary.
+			if hasSep && visEnd+1 == len(sessions) {
+				nextW += sepWidth
+			}
+			// Reserve space for left overflow indicator.
+			leftOverflow := 0
+			if visStart > 0 {
+				leftOverflow = overflowBase + spaceWidth
+			}
+			rightOverflow := 0
+			if visEnd+2 < totalPills {
+				rightOverflow = overflowBase + spaceWidth
+			}
+			if usedWidth+nextW+leftOverflow+rightOverflow <= budget {
+				visEnd++
+				usedWidth += nextW
+				expanded = true
+			}
+		}
+		// Try left.
+		if visStart-1 >= 0 {
+			nextW := allPills[visStart-1].width + spaceWidth
+			if hasSep && visStart == len(sessions) {
+				nextW += sepWidth
+			}
+			leftOverflow := 0
+			if visStart-2 >= 0 {
+				leftOverflow = overflowBase + spaceWidth
+			}
+			rightOverflow := 0
+			if visEnd+1 < totalPills {
+				rightOverflow = overflowBase + spaceWidth
+			}
+			if usedWidth+nextW+leftOverflow+rightOverflow <= budget {
+				visStart--
+				usedWidth += nextW
+				expanded = true
+			}
+		}
+		if !expanded {
+			break
+		}
+	}
+
+	// Build visible pills with overflow indicators.
+	var pills []string
+	if visStart > 0 {
+		pills = append(pills, overflowStyle.Render(fmt.Sprintf("+%d", visStart)))
+	}
+	for i := visStart; i <= visEnd; i++ {
+		if hasSep && i == len(sessions) && visStart <= len(sessions)-1 {
+			pills = append(pills, sepStr)
+		}
+		pills = append(pills, allPills[i].rendered)
+	}
+	if visEnd < totalPills-1 {
+		pills = append(pills, overflowStyle.Render(fmt.Sprintf("+%d", totalPills-1-visEnd)))
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Center, interleave(pills, " ")...)
@@ -46,7 +232,14 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 // renderPRPill renders a single PR pill in the strip.
 func renderPRPill(p client.TrackedPR, selected bool) string {
 	icon := prPillIcon(p.State)
-	label := fmt.Sprintf("%s #%d %s", icon, p.Number, truncateMiddle(p.Title, 15))
+
+	// For merged PRs, just show "#N" since the title no longer matters.
+	var label string
+	if p.State == "merged" || p.State == "closed" {
+		label = fmt.Sprintf("%s #%d", icon, p.Number)
+	} else {
+		label = fmt.Sprintf("%s #%d %s", icon, p.Number, truncateWordBoundary(p.Title, 15))
+	}
 
 	sc := prStateColor(p.State)
 
@@ -69,17 +262,17 @@ func renderPRPill(p client.TrackedPR, selected bool) string {
 func prPillIcon(state string) string {
 	switch state {
 	case "checks_failing":
-		return "✗"
+		return "\u2717"
 	case "checks_running":
-		return "⏳"
+		return "\u23f3"
 	case "checks_passing":
-		return "✓"
+		return "\u2713"
 	case "approved":
-		return "✅"
+		return "\u2713"
 	case "merged":
-		return "🚀"
+		return "\u2713"
 	default:
-		return "•"
+		return "\u2022"
 	}
 }
 
@@ -112,6 +305,92 @@ func truncateMiddle(s string, maxLen int) string {
 	}
 	half := (maxLen - 3) / 2
 	return string(runes[:half]) + "\u2026" + string(runes[len(runes)-half:])
+}
+
+// truncateWordBoundary truncates a string at a word boundary if it exceeds maxLen.
+// Unlike truncateMiddle, it avoids cutting mid-word.
+func truncateWordBoundary(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	if maxLen < 4 {
+		return string(runes[:maxLen])
+	}
+	// Find the last space before maxLen-1 (leaving room for ellipsis).
+	cutoff := maxLen - 1
+	lastSpace := -1
+	for i := cutoff; i >= 0; i-- {
+		if runes[i] == ' ' || runes[i] == '-' || runes[i] == '/' {
+			lastSpace = i
+			break
+		}
+	}
+	if lastSpace > maxLen/3 {
+		return strings.TrimRight(string(runes[:lastSpace]), " ") + "\u2026"
+	}
+	// No good break point — just truncate.
+	return string(runes[:maxLen-1]) + "\u2026"
+}
+
+// stripXMLTags removes XML/HTML tags from a string (e.g. <task-notification>).
+var xmlTagRe = regexp.MustCompile(`<[^>]+>`)
+
+func stripXMLTags(s string) string {
+	return xmlTagRe.ReplaceAllString(s, "")
+}
+
+// containsCCInternalMarkup returns true if the string looks like CC internal
+// messaging (task notifications, etc.) that should be filtered out.
+func containsCCInternalMarkup(s string) bool {
+	return strings.Contains(s, "<task-") || strings.Contains(s, "<tool_") ||
+		strings.Contains(s, "</task-") || strings.Contains(s, "<notification")
+}
+
+// stripMarkdown removes common markdown formatting from a string:
+// **, ##, |, table dividers (---|---), etc.
+func stripMarkdown(s string) string {
+	// Remove bold/italic markers.
+	s = strings.ReplaceAll(s, "**", "")
+	s = strings.ReplaceAll(s, "__", "")
+	// Remove heading markers.
+	lines := strings.Split(s, "\n")
+	var cleaned []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Skip pure table divider lines (---|---|---).
+		if len(trimmed) > 0 && isTableDivider(trimmed) {
+			continue
+		}
+		// Strip leading ## markers.
+		for strings.HasPrefix(trimmed, "#") {
+			trimmed = strings.TrimPrefix(trimmed, "#")
+		}
+		trimmed = strings.TrimSpace(trimmed)
+		// Strip leading/trailing pipe characters (table rows).
+		if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
+			trimmed = strings.Trim(trimmed, "| ")
+			// Replace inner pipes with commas for readability.
+			trimmed = strings.ReplaceAll(trimmed, " | ", ", ")
+			trimmed = strings.ReplaceAll(trimmed, "|", ", ")
+		}
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	return strings.Join(cleaned, " ")
+}
+
+// isTableDivider returns true if a line is a markdown table divider like ---|---|---.
+func isTableDivider(s string) bool {
+	s = strings.ReplaceAll(s, "-", "")
+	s = strings.ReplaceAll(s, "|", "")
+	s = strings.ReplaceAll(s, ":", "")
+	s = strings.TrimSpace(s)
+	return s == ""
 }
 
 // countPending returns the total pending tools across all sessions.
