@@ -31,6 +31,14 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 	line1 := "  " + hyperlink(pr.URL, refStyle.Render(prRef)) + "  " +
 		styleZoomHeader.Render(pr.Title) + " " +
 		stateStyle.Render(prStateLabel(pr.State))
+
+	// Autopilot badge.
+	switch pr.AutopilotMode {
+	case "auto":
+		line1 += " " + styleAutopilotOn.Render("⚙ AUTO")
+	case "yolo":
+		line1 += " " + styleAutopilotWarn.Render("⚠ YOLO")
+	}
 	if pr.Hammer {
 		line1 += " " + lipgloss.NewStyle().Foreground(colorOrange).Bold(true).Render("🔨")
 	}
@@ -46,7 +54,7 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 	} else if pr.Mergeable == "CONFLICTING" {
 		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorDestructive).Render("conflicts"))
 	}
-	if pr.AutoMerge {
+	if pr.AutopilotMode == "auto" || pr.AutopilotMode == "yolo" {
 		infoParts = append(infoParts, "automerge")
 	}
 	headerLines = append(headerLines, "  "+lipgloss.NewStyle().Foreground(colorDimFg).

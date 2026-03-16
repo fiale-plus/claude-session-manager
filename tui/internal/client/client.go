@@ -64,9 +64,9 @@ type TrackedPR struct {
 	Additions   int       `json:"additions"`
 	Deletions   int       `json:"deletions"`
 	CommitCount int       `json:"commit_count"`
-	AutoMerge   bool      `json:"auto_merge"`
-	Hammer      bool      `json:"hammer"`
-	HammerCount int       `json:"hammer_count"`
+	AutopilotMode string   `json:"autopilot_mode"`
+	Hammer        bool     `json:"hammer"`
+	HammerCount   int      `json:"hammer_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	Timeline    []PREvent `json:"timeline"`
 }
@@ -230,6 +230,11 @@ func (c *Client) AddPR(url string) error {
 // RemovePR removes a PR from tracking by key (owner/repo#number).
 func (c *Client) RemovePR(key string) error {
 	return c.sendCommand(request{Action: "remove_pr", PRKey: key})
+}
+
+// CyclePRAutopilot cycles PR autopilot: off → auto → yolo → off.
+func (c *Client) CyclePRAutopilot(key string) error {
+	return c.sendCommand(request{Action: "cycle_pr_autopilot", PRKey: key})
 }
 
 // Focus focuses the Ghostty tab for the given session.

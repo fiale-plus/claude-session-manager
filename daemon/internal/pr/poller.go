@@ -42,13 +42,14 @@ func (p *Poller) Add(owner, repo string, number int) *TrackedPR {
 	}
 
 	pr := &TrackedPR{
-		Owner:      owner,
-		Repo:       repo,
-		Number:     number,
-		AutoMerge:  true,
-		Hammer:     true,
-		MergeMethod: "squash",
-		Timeline:   []PREvent{{Time: time.Now(), Icon: "📝", Message: "Added to tracking"}},
+		Owner:         owner,
+		Repo:          repo,
+		Number:        number,
+		AutopilotMode: PRAuto,
+		Hammer:        true,
+		MaxHammer:     3,
+		MergeMethod:   "squash",
+		Timeline:      []PREvent{{Time: time.Now(), Icon: "📝", Message: "Added to tracking"}},
 	}
 	p.tracked[key] = pr
 	p.save()
@@ -99,6 +100,37 @@ func (p *Poller) GetAll() []TrackedPR {
 	return result
 }
 
+// CycleAutopilot cycles PR autopilot: off → auto → yolo → off.
+func (p *Poller) CycleAutopilot(owner, repo string, number int) string {
+	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	pr, ok := p.tracked[key]
+	if !ok {
+		return ""
+	}
+
+	switch pr.AutopilotMode {
+	case PRAuto:
+		pr.AutopilotMode = PRYolo
+	case PRYolo:
+		pr.AutopilotMode = PROff
+	default:
+		pr.AutopilotMode = PRAuto
+	}
+	pr.Timeline = append(pr.Timeline, PREvent{
+		Time:    time.Now(),
+		Icon:    "⚙",
+		Message: fmt.Sprintf("Autopilot → %s", pr.AutopilotMode),
+	})
+	p.save()
+	if p.onChange != nil {
+		p.onChange()
+	}
+	return pr.AutopilotMode
+}
+
 // FailingCount returns how many PRs have failing checks.
 func (p *Poller) FailingCount() int {
 	p.mu.RLock()
@@ -114,6 +146,7 @@ func (p *Poller) FailingCount() int {
 
 // Poll fetches latest state for all tracked PRs from GitHub.
 func (p *Poller) Poll() {
+	log.Printf("pr: polling %d tracked PRs (gh=%s)", len(p.tracked), ghBin())
 	p.mu.RLock()
 	keys := make([]string, 0, len(p.tracked))
 	for k := range p.tracked {
@@ -149,7 +182,7 @@ func (p *Poller) pollOne(owner, repo string, number int) bool {
 	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
 
 	// Fetch PR data.
-	out, err := exec.Command("gh", "pr", "view",
+	out, err := exec.Command(ghBin(), "pr", "view",
 		fmt.Sprintf("%d", number),
 		"--repo", fmt.Sprintf("%s/%s", owner, repo),
 		"--json", "title,headRefName,baseRefName,url,state,statusCheckRollup,reviews,latestReviews,mergeable,additions,deletions,commits,isDraft,updatedAt",
@@ -270,8 +303,8 @@ func (p *Poller) pollOne(owner, repo string, number int) bool {
 		}
 	}
 
-	// Timeline events on state change.
-	if pr.State != oldState && oldState != "" {
+	// Timeline events on state change (including first detection).
+	if pr.State != oldState {
 		pr.Timeline = append(pr.Timeline, PREvent{
 			Time:    time.Now(),
 			Icon:    stateIcon(pr.State),
@@ -279,7 +312,66 @@ func (p *Poller) pollOne(owner, repo string, number int) bool {
 		})
 	}
 
+	// Auto-merge if conditions met.
+	if pr.ShouldAutoMerge() {
+		go p.triggerMerge(pr)
+	}
+
+	// Auto-hammer if CI failing and hammer mode on.
+	if pr.ShouldHammer() && pr.State == StateChecksFailing && pr.State != oldState {
+		pr.HammerCount++
+		pr.Timeline = append(pr.Timeline, PREvent{
+			Time:    time.Now(),
+			Icon:    "🔨",
+			Message: fmt.Sprintf("Hammer attempt %d/%d", pr.HammerCount, pr.MaxHammer),
+		})
+		log.Printf("pr: hammer %s/%s#%d attempt %d", pr.Owner, pr.Repo, pr.Number, pr.HammerCount)
+		// TODO: spawn fix-CI agent here
+	}
+
 	return pr.State != oldState
+}
+
+func (p *Poller) triggerMerge(pr *TrackedPR) {
+	key := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+	repo := fmt.Sprintf("%s/%s", pr.Owner, pr.Repo)
+	num := fmt.Sprintf("%d", pr.Number)
+
+	var err error
+	switch pr.MergeMethod {
+	case "aviator":
+		err = exec.Command(ghBin(), "pr", "comment", num,
+			"--repo", repo, "--body", "/aviator merge").Run()
+	case "rebase":
+		err = exec.Command(ghBin(), "pr", "merge", num,
+			"--repo", repo, "--rebase", "--auto").Run()
+	case "merge":
+		err = exec.Command(ghBin(), "pr", "merge", num,
+			"--repo", repo, "--merge", "--auto").Run()
+	default: // squash
+		err = exec.Command(ghBin(), "pr", "merge", num,
+			"--repo", repo, "--squash", "--auto").Run()
+	}
+
+	p.mu.Lock()
+	if tracked, ok := p.tracked[key]; ok {
+		if err != nil {
+			tracked.Timeline = append(tracked.Timeline, PREvent{
+				Time: time.Now(), Icon: "✗", Message: "Auto-merge failed: " + err.Error(),
+			})
+			log.Printf("pr: auto-merge %s failed: %v", key, err)
+		} else {
+			tracked.Timeline = append(tracked.Timeline, PREvent{
+				Time: time.Now(), Icon: "🚀", Message: "Auto-merge triggered (" + pr.MergeMethod + ")",
+			})
+			log.Printf("pr: auto-merge %s triggered (%s)", key, pr.MergeMethod)
+		}
+		p.save()
+	}
+	p.mu.Unlock()
+	if p.onChange != nil {
+		p.onChange()
+	}
 }
 
 func stateIcon(s PRState) string {
@@ -356,6 +448,24 @@ type ghAuthor struct {
 }
 
 type ghCommit struct{}
+
+// ghBin returns the path to the gh CLI binary.
+func ghBin() string {
+	// Try common paths for launchd context where PATH is minimal.
+	for _, p := range []string{
+		"/opt/homebrew/bin/gh",
+		"/usr/local/bin/gh",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	// Fallback to PATH lookup.
+	if p, err := exec.LookPath("gh"); err == nil {
+		return p
+	}
+	return "gh"
+}
 
 // --- persistence ---
 

@@ -331,10 +331,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "a":
 		if sel := m.selected(); sel != nil {
+			// Session autopilot.
 			sid := sel.SessionID
 			return m, func() tea.Msg {
 				err := m.client.ToggleAutopilot(sid)
 				return actionResultMsg{action: "autopilot toggle", err: err}
+			}
+		} else if pr := m.selectedPR(); pr != nil {
+			// PR autopilot: off → auto → yolo → off.
+			key := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+			return m, func() tea.Msg {
+				err := m.client.CyclePRAutopilot(key)
+				return actionResultMsg{action: "PR autopilot", err: err}
 			}
 		}
 

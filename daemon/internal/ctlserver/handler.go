@@ -68,6 +68,8 @@ func (h *Handler) Handle(conn net.Conn) {
 			h.handleAddPR(conn, req.PRURL)
 		case "remove_pr":
 			h.handleRemovePR(conn, req.PRKey)
+		case "cycle_pr_autopilot":
+			h.handleCyclePRAutopilot(conn, req.PRKey)
 		}
 	}
 }
@@ -165,6 +167,31 @@ func (h *Handler) handleAddPR(conn net.Conn, url string) {
 	writeJSON(conn, ctlResponse{OK: &ok})
 	// Trigger immediate poll for the new PR.
 	go h.prPoll.Poll()
+}
+
+func (h *Handler) handleCyclePRAutopilot(conn net.Conn, key string) {
+	if h.prPoll == nil {
+		f := false
+		writeJSON(conn, ctlResponse{OK: &f})
+		return
+	}
+	parts := strings.SplitN(key, "#", 2)
+	if len(parts) != 2 {
+		f := false
+		writeJSON(conn, ctlResponse{OK: &f})
+		return
+	}
+	ownerRepo := strings.SplitN(parts[0], "/", 2)
+	if len(ownerRepo) != 2 {
+		f := false
+		writeJSON(conn, ctlResponse{OK: &f})
+		return
+	}
+	var number int
+	fmt.Sscanf(parts[1], "%d", &number)
+	mode := h.prPoll.CycleAutopilot(ownerRepo[0], ownerRepo[1], number)
+	ok := mode != ""
+	writeJSON(conn, ctlResponse{OK: &ok, AutopilotMode: mode})
 }
 
 func (h *Handler) handleRemovePR(conn net.Conn, key string) {
