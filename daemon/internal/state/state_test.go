@@ -606,6 +606,197 @@ func TestAddPendingSafeNotDestructive(t *testing.T) {
 	}
 }
 
+// --- Concurrent operations ---
+
+func TestConcurrentRegisterAndGetSessions(t *testing.T) {
+	m := newTestManager()
+	done := make(chan struct{})
+	for g := 0; g < 5; g++ {
+		go func(n int) {
+			for i := 0; i < 20; i++ {
+				sid := "s" + string(rune('a'+n)) + string(rune('0'+i%10))
+				m.RegisterSession(sid, "/path", "default")
+			}
+			done <- struct{}{}
+		}(g)
+	}
+	for g := 0; g < 5; g++ {
+		go func() {
+			for i := 0; i < 20; i++ {
+				_ = m.GetSessions()
+			}
+			done <- struct{}{}
+		}()
+	}
+	for g := 0; g < 10; g++ {
+		<-done
+	}
+}
+
+func TestConcurrentCycleAutopilot(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+	done := make(chan struct{})
+	for g := 0; g < 5; g++ {
+		go func() {
+			for i := 0; i < 20; i++ {
+				m.CycleAutopilot("s1")
+			}
+			done <- struct{}{}
+		}()
+	}
+	for g := 0; g < 5; g++ {
+		<-done
+	}
+}
+
+func TestConcurrentSubscribeNotify(t *testing.T) {
+	m := newTestManager()
+	done := make(chan struct{})
+	for g := 0; g < 3; g++ {
+		go func() {
+			ch := m.Subscribe()
+			defer m.Unsubscribe(ch)
+			for i := 0; i < 10; i++ {
+				select {
+				case <-ch:
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+			done <- struct{}{}
+		}()
+	}
+	for g := 0; g < 3; g++ {
+		go func() {
+			for i := 0; i < 10; i++ {
+				m.NotifySubscribers()
+			}
+			done <- struct{}{}
+		}()
+	}
+	for g := 0; g < 6; g++ {
+		<-done
+	}
+}
+
+func TestConcurrentAddResolvePending(t *testing.T) {
+	m := newTestManager()
+	m.RegisterSession("s1", "/path", "default")
+	done := make(chan struct{})
+
+	go func() {
+		for i := 0; i < 20; i++ {
+			tool := model.PendingTool{ToolName: "Read", ToolInput: map[string]any{"file_path": "/a"}}
+			m.AddPending("s1", tool)
+			// Small sleep to let resolve happen sometimes.
+			time.Sleep(time.Millisecond)
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		for i := 0; i < 20; i++ {
+			m.ResolvePending("s1", model.DecisionAllow)
+			time.Sleep(time.Millisecond)
+		}
+		done <- struct{}{}
+	}()
+	<-done
+	<-done
+}
+
+// --- UpdateSessionFromScanner ---
+
+func TestUpdateSessionFromScannerNewSession(t *testing.T) {
+	m := newTestManager()
+	s := &model.Session{
+		SessionID: "scanner-1",
+		CWD:       "/discovered/path",
+		State:     model.StateRunning,
+		PID:       12345,
+	}
+	m.UpdateSessionFromScanner(s)
+
+	sessions := m.GetSessions()
+	if len(sessions) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(sessions))
+	}
+	if sessions[0].SessionID != "scanner-1" {
+		t.Errorf("sid = %q, want scanner-1", sessions[0].SessionID)
+	}
+	if sessions[0].State != model.StateRunning {
+		t.Errorf("state = %q, want running", sessions[0].State)
+	}
+}
+
+func TestUpdateSessionFromScannerMergesExisting(t *testing.T) {
+	m := newTestManager()
+	// Register via hook first.
+	m.RegisterSession("s1", "/hook/path", "plan")
+	m.SetSlug("s1", "my-slug")
+
+	// Then scanner updates with richer data.
+	s := &model.Session{
+		SessionID: "s1",
+		CWD:       "/scanner/path", // should NOT overwrite hook CWD
+		State:     model.StateRunning,
+		PID:       999,
+		GitBranch: "feature",
+	}
+	m.UpdateSessionFromScanner(s)
+
+	sessions := m.GetSessions()
+	if sessions[0].CWD != "/hook/path" {
+		t.Errorf("CWD should keep hook value, got %q", sessions[0].CWD)
+	}
+	if sessions[0].State != model.StateRunning {
+		t.Errorf("state should be updated from scanner, got %q", sessions[0].State)
+	}
+	if sessions[0].PID != 999 {
+		t.Errorf("PID should be updated from scanner, got %d", sessions[0].PID)
+	}
+	if sessions[0].GitBranch != "feature" {
+		t.Errorf("git_branch should be updated from scanner, got %q", sessions[0].GitBranch)
+	}
+}
+
+func TestUpdateSessionFromScannerRestoresAutopilot(t *testing.T) {
+	m := newTestManager()
+	m.autopilot["scanner-1"] = model.AutopilotYolo
+	s := &model.Session{SessionID: "scanner-1", CWD: "/path", State: model.StateIdle, PID: 1}
+	m.UpdateSessionFromScanner(s)
+
+	sessions := m.GetSessions()
+	if sessions[0].AutopilotMode != model.AutopilotYolo {
+		t.Errorf("autopilot = %q, want yolo", sessions[0].AutopilotMode)
+	}
+}
+
+// --- Persistence ---
+
+func TestNewWithDirPersistsAutopilot(t *testing.T) {
+	dir := t.TempDir()
+	m := NewWithDir(dir)
+	m.RegisterSession("s1", "/path", "default")
+	m.CycleAutopilot("s1") // off -> on
+
+	// Create new manager from same dir.
+	m2 := NewWithDir(dir)
+	m2.RegisterSession("s1", "/path", "default")
+	sessions := m2.GetSessions()
+	if sessions[0].AutopilotMode != model.AutopilotOn {
+		t.Errorf("persisted autopilot = %q, want on", sessions[0].AutopilotMode)
+	}
+}
+
+func TestNewWithDirEmptyDir(t *testing.T) {
+	m := NewWithDir("")
+	m.RegisterSession("s1", "/path", "default")
+	sessions := m.GetSessions()
+	if len(sessions) != 1 {
+		t.Errorf("got %d sessions, want 1", len(sessions))
+	}
+}
+
 func TestResolvePendingClearsPendingTools(t *testing.T) {
 	m := newTestManager()
 	m.RegisterSession("s1", "/path", "default")
