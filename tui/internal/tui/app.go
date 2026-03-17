@@ -65,10 +65,9 @@ type Model struct {
 	glowDir      int // 1 or -1 for ping-pong
 	inputMode          bool              // text input active (for + add PR)
 	inputBuffer        string            // text being typed
-	mergePickerVisible   bool              // merge strategy picker showing
-	mergePickerPR        *client.TrackedPR // PR being merged (may be nil for config-only mode)
-	mergePickerPRKey     string            // "owner/repo#N" — used for SetMergeMethod
-	mergePickerForConfig bool              // true when picker is for configuring method (new repo), not immediate merge
+	mergePickerVisible bool              // merge method picker showing
+	mergePickerPR      *client.TrackedPR // PR being configured (for display)
+	mergePickerPRKey   string            // "owner/repo#N" — used for SetMergeMethod
 	scrollOffset int // scroll position in zoom body
 }
 
@@ -240,7 +239,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.mergePickerPR = found
 			m.mergePickerPRKey = msg.prKey
-			m.mergePickerForConfig = true
 			m.mergePickerVisible = true
 			return m, nil
 		}
@@ -504,126 +502,63 @@ end tell`, tabIdx, tabIdx)
 		}
 
 	case "m":
-		// Merge selected PR — show merge strategy picker (immediate merge + persist).
+		// Set merge method for selected PR — daemon handles the actual merge.
 		if pr := m.selectedPR(); pr != nil {
 			m.mergePickerPR = pr
 			m.mergePickerPRKey = prKey(pr)
-			m.mergePickerForConfig = false
-			m.mergePickerVisible = true
-			return m, nil
-		}
-
-	case "M":
-		// Change merge method for selected PR — picker in config-only mode.
-		if pr := m.selectedPR(); pr != nil {
-			m.mergePickerPR = pr
-			m.mergePickerPRKey = prKey(pr)
-			m.mergePickerForConfig = true
 			m.mergePickerVisible = true
 			return m, nil
 		}
 
 	case "1":
-		// Merge picker: squash automerge.
-		if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
-			pr := m.mergePickerPR
+		// Merge picker: squash.
+		if m.mergePickerVisible {
 			key := m.mergePickerPRKey
-			forConfig := m.mergePickerForConfig
 			m.mergePickerVisible = false
 			m.mergePickerPR = nil
 			m.mergePickerPRKey = ""
-			m.mergePickerForConfig = false
 			return m, func() tea.Msg {
 				_ = m.client.SetMergeMethod(key, "squash")
-				if forConfig {
-					return actionResultMsg{action: "merge method set: squash"}
-				}
-				err := exec.Command("gh", "pr", "merge",
-					fmt.Sprintf("%d", pr.Number),
-					"--repo", fmt.Sprintf("%s/%s", pr.Owner, pr.Repo),
-					"--squash", "--auto").Run()
-				if err != nil {
-					return actionResultMsg{action: "squash merge", err: err}
-				}
-				return actionResultMsg{action: "squash automerge enabled"}
+				return actionResultMsg{action: "merge method: squash"}
 			}
 		}
 
 	case "2":
-		// Merge picker: rebase automerge.
-		if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
-			pr := m.mergePickerPR
+		// Merge picker: rebase.
+		if m.mergePickerVisible {
 			key := m.mergePickerPRKey
-			forConfig := m.mergePickerForConfig
 			m.mergePickerVisible = false
 			m.mergePickerPR = nil
 			m.mergePickerPRKey = ""
-			m.mergePickerForConfig = false
 			return m, func() tea.Msg {
 				_ = m.client.SetMergeMethod(key, "rebase")
-				if forConfig {
-					return actionResultMsg{action: "merge method set: rebase"}
-				}
-				err := exec.Command("gh", "pr", "merge",
-					fmt.Sprintf("%d", pr.Number),
-					"--repo", fmt.Sprintf("%s/%s", pr.Owner, pr.Repo),
-					"--rebase", "--auto").Run()
-				if err != nil {
-					return actionResultMsg{action: "rebase merge", err: err}
-				}
-				return actionResultMsg{action: "rebase automerge enabled"}
+				return actionResultMsg{action: "merge method: rebase"}
 			}
 		}
 
 	case "3":
-		// Merge picker: Aviator merge queue.
-		if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
-			pr := m.mergePickerPR
+		// Merge picker: Aviator.
+		if m.mergePickerVisible {
 			key := m.mergePickerPRKey
-			forConfig := m.mergePickerForConfig
 			m.mergePickerVisible = false
 			m.mergePickerPR = nil
 			m.mergePickerPRKey = ""
-			m.mergePickerForConfig = false
 			return m, func() tea.Msg {
 				_ = m.client.SetMergeMethod(key, "aviator")
-				if forConfig {
-					return actionResultMsg{action: "merge method set: aviator"}
-				}
-				err := exec.Command("gh", "pr", "comment",
-					fmt.Sprintf("%d", pr.Number),
-					"--repo", fmt.Sprintf("%s/%s", pr.Owner, pr.Repo),
-					"--body", "/aviator merge").Run()
-				if err != nil {
-					return actionResultMsg{action: "aviator merge", err: err}
-				}
-				return actionResultMsg{action: "aviator merge queued"}
+				return actionResultMsg{action: "merge method: aviator"}
 			}
 		}
 
 	case "4":
-		// Merge picker: merge commit automerge.
-		if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
-			pr := m.mergePickerPR
+		// Merge picker: merge commit.
+		if m.mergePickerVisible {
 			key := m.mergePickerPRKey
-			forConfig := m.mergePickerForConfig
 			m.mergePickerVisible = false
 			m.mergePickerPR = nil
 			m.mergePickerPRKey = ""
-			m.mergePickerForConfig = false
 			return m, func() tea.Msg {
 				_ = m.client.SetMergeMethod(key, "merge")
-				if forConfig {
-					return actionResultMsg{action: "merge method set: merge commit"}
-				}
-				err := exec.Command("gh", "pr", "merge",
-					fmt.Sprintf("%d", pr.Number),
-					"--repo", fmt.Sprintf("%s/%s", pr.Owner, pr.Repo),
-					"--merge", "--auto").Run()
-				if err != nil {
-					return actionResultMsg{action: "merge commit", err: err}
-				}
-				return actionResultMsg{action: "merge commit automerge enabled"}
+				return actionResultMsg{action: "merge method: merge commit"}
 			}
 		}
 
@@ -632,7 +567,6 @@ end tell`, tabIdx, tabIdx)
 			m.mergePickerVisible = false
 			m.mergePickerPR = nil
 			m.mergePickerPRKey = ""
-			m.mergePickerForConfig = false
 		} else if m.inputMode {
 			m.inputMode = false
 			m.inputBuffer = ""
@@ -751,27 +685,22 @@ func (m Model) View() string {
 
 	bottomHeight := stripHeight + hintsHeight
 
-	// Merge strategy picker overlay.
-	if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
+	// Merge method picker overlay.
+	if m.mergePickerVisible {
 		var header string
-		if m.mergePickerForConfig {
-			if m.mergePickerPR != nil {
-				pr := m.mergePickerPR
-				header = fmt.Sprintf("  Set merge method for #%d %s\n", pr.Number, pr.Title)
-			} else {
-				header = fmt.Sprintf("  Set merge method for %s\n", m.mergePickerPRKey)
-			}
-		} else {
+		if m.mergePickerPR != nil {
 			pr := m.mergePickerPR
-			header = fmt.Sprintf("  Merge #%d %s\n", pr.Number, pr.Title)
+			header = fmt.Sprintf("  Set merge method for #%d %s\n", pr.Number, pr.Title)
+		} else {
+			header = fmt.Sprintf("  Set merge method for %s\n", m.mergePickerPRKey)
 		}
 		picker := lipgloss.NewStyle().Padding(1, 2).Render(
 			styleZoomHeader.Render(header) + "\n" +
 				lipgloss.NewStyle().Foreground(colorFg).Render(
-					"  [1] Squash automerge\n"+
-						"  [2] Rebase automerge\n"+
+					"  [1] Squash\n"+
+						"  [2] Rebase\n"+
 						"  [3] Aviator merge queue\n"+
-						"  [4] Merge commit automerge\n"+
+						"  [4] Merge commit\n"+
 						"  [Esc] Cancel"))
 
 		return lipgloss.JoinVertical(lipgloss.Left,
