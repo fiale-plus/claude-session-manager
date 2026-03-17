@@ -794,10 +794,14 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 	pendingStr := ""
 	pending := countPending(sessions)
 	if pending > 0 {
-		pendingStr = lipgloss.NewStyle().
-			Foreground(colorOrange).
+		// Badge-style: dark text on orange background to catch the eye.
+		pendingBadge := lipgloss.NewStyle().
+			Foreground(lipgloss.ANSIColor(0)).
+			Background(colorOrange).
 			Bold(true).
-			Render(fmt.Sprintf("  \u26a1 %d pending", pending))
+			Padding(0, 1).
+			Render(fmt.Sprintf("\u26a1 %d PENDING", pending))
+		pendingStr = "  " + pendingBadge
 	}
 
 	failingStr := ""
