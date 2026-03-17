@@ -57,6 +57,11 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 	if pr.AutopilotMode == "auto" || pr.AutopilotMode == "yolo" {
 		infoParts = append(infoParts, "automerge")
 	}
+	if pr.MergeMethod != "" {
+		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorAccent).Render("⎇ "+pr.MergeMethod))
+	} else {
+		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorWaiting).Render("⎇ unset"))
+	}
 	headerLines = append(headerLines, "  "+lipgloss.NewStyle().Foreground(colorDimFg).
 		Render(strings.Join(infoParts, "  ")))
 

@@ -64,11 +64,12 @@ type TrackedPR struct {
 	Additions   int       `json:"additions"`
 	Deletions   int       `json:"deletions"`
 	CommitCount int       `json:"commit_count"`
-	AutopilotMode string   `json:"autopilot_mode"`
-	Hammer        bool     `json:"hammer"`
-	HammerCount   int      `json:"hammer_count"`
-	CreatedAt   time.Time `json:"created_at"`
-	Timeline    []PREvent `json:"timeline"`
+	AutopilotMode string    `json:"autopilot_mode"`
+	Hammer        bool      `json:"hammer"`
+	HammerCount   int       `json:"hammer_count"`
+	MergeMethod   string    `json:"merge_method"`
+	CreatedAt     time.Time `json:"created_at"`
+	Timeline      []PREvent `json:"timeline"`
 }
 
 type PRCheck struct {

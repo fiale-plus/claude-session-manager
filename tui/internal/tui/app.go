@@ -504,11 +504,21 @@ end tell`, tabIdx, tabIdx)
 		}
 
 	case "m":
-		// Merge selected PR — show merge strategy picker.
+		// Merge selected PR — show merge strategy picker (immediate merge + persist).
 		if pr := m.selectedPR(); pr != nil {
 			m.mergePickerPR = pr
 			m.mergePickerPRKey = prKey(pr)
 			m.mergePickerForConfig = false
+			m.mergePickerVisible = true
+			return m, nil
+		}
+
+	case "M":
+		// Change merge method for selected PR — picker in config-only mode.
+		if pr := m.selectedPR(); pr != nil {
+			m.mergePickerPR = pr
+			m.mergePickerPRKey = prKey(pr)
+			m.mergePickerForConfig = true
 			m.mergePickerVisible = true
 			return m, nil
 		}
@@ -744,11 +754,16 @@ func (m Model) View() string {
 	// Merge strategy picker overlay.
 	if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
 		var header string
-		if m.mergePickerPR != nil {
+		if m.mergePickerForConfig {
+			if m.mergePickerPR != nil {
+				pr := m.mergePickerPR
+				header = fmt.Sprintf("  Set merge method for #%d %s\n", pr.Number, pr.Title)
+			} else {
+				header = fmt.Sprintf("  Set merge method for %s\n", m.mergePickerPRKey)
+			}
+		} else {
 			pr := m.mergePickerPR
 			header = fmt.Sprintf("  Merge #%d %s\n", pr.Number, pr.Title)
-		} else {
-			header = fmt.Sprintf("  Set merge method for %s\n", m.mergePickerPRKey)
 		}
 		picker := lipgloss.NewStyle().Padding(1, 2).Render(
 			styleZoomHeader.Render(header) + "\n" +
