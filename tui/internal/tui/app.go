@@ -820,10 +820,14 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 
 	failingStr := ""
 	if failingPRs > 0 {
-		failingStr = lipgloss.NewStyle().
-			Foreground(colorDestructive).
+		// Badge-style: dark text on red background, consistent with pending badge.
+		failingBadge := lipgloss.NewStyle().
+			Foreground(lipgloss.ANSIColor(0)).
+			Background(colorDestructive).
 			Bold(true).
-			Render(fmt.Sprintf("  \u2717 %d failing", failingPRs))
+			Padding(0, 1).
+			Render(fmt.Sprintf("\u2717 %d FAILING", failingPRs))
+		failingStr = "  " + failingBadge
 	}
 
 	// State breakdown: count sessions per state.

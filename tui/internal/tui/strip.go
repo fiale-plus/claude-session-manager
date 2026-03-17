@@ -118,45 +118,8 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		isSelected bool
 	}
 
-	// Build a compact state-group summary prefix when there are many sessions.
-	// Format: "▶2 ⏸1 ✔5 ●2" — lets user scan state distribution instantly.
-	var summaryPill pillEntry
-	hasSummary := false
-	if len(sessions) >= 5 {
-		counts := map[string]int{}
-		for _, s := range sessions {
-			counts[s.State]++
-		}
-		var parts []string
-		if n := counts["running"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("\u25b6%d", n))
-		}
-		if n := counts["waiting"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("\u23f8%d", n))
-		}
-		if n := counts["idle"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("\u2714%d", n))
-		}
-		if n := counts["dead"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("\u25cf%d", n))
-		}
-		if len(parts) > 0 {
-			summaryStr := lipgloss.NewStyle().
-				Foreground(colorDimFg).
-				Render(strings.Join(parts, " "))
-			summaryPill = pillEntry{
-				rendered: summaryStr,
-				width:    lipgloss.Width(summaryStr),
-			}
-			hasSummary = true
-		}
-	}
-
 	// Build all pill entries.
 	var allPills []pillEntry
-	if hasSummary {
-		allPills = append(allPills, summaryPill)
-	}
 	for i, s := range sessions {
 		p := renderPillWithName(s, nameMap[s.SessionID], i == selectedIdx, glowPos)
 		allPills = append(allPills, pillEntry{
@@ -164,11 +127,6 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 			width:      lipgloss.Width(p),
 			isSelected: i == selectedIdx,
 		})
-	}
-
-	// Adjust selectedIdx to account for prepended summary pill.
-	if hasSummary {
-		selectedIdx++ // shift: summary occupies index 0
 	}
 
 	// Filter terminal PRs when active ones exist: hide merged/closed PRs from
@@ -187,9 +145,6 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		for _, p := range prs {
 			if p.State == "merged" || p.State == "closed" {
 				doneCount++
-				// If this PR is selected, include it anyway so selection stays valid.
-				prIdx := len(sessions) + len(filtered)
-				_ = prIdx
 			} else {
 				filtered = append(filtered, p)
 			}
@@ -226,6 +181,10 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		sepWidth = lipgloss.Width(sepStr) + 2 // " │ " with surrounding spaces
 	}
 
+	// sepBoundary is the allPills index where the separator should be inserted.
+	// Initially == len(sessions) (no summary pill prepended yet).
+	sepBoundary := len(sessions)
+
 	for i, p := range visiblePRs {
 		prIdx := len(sessions) + i
 		pill := renderPRPill(p, prIdx == selectedIdx)
@@ -250,6 +209,39 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 			width:      lipgloss.Width(doneStr),
 			isSelected: false,
 		})
+	}
+
+	// Prepend a compact state-group summary when there are many sessions.
+	// Format: "▶2 ⏸1 ✔5 ●2" — lets user scan state distribution instantly.
+	// Done after PR processing so we can update selectedIdx and sepBoundary cleanly.
+	if len(sessions) >= 5 {
+		counts := map[string]int{}
+		for _, s := range sessions {
+			counts[s.State]++
+		}
+		var parts []string
+		if n := counts["running"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u25b6%d", n))
+		}
+		if n := counts["waiting"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u23f8%d", n))
+		}
+		if n := counts["idle"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u2714%d", n))
+		}
+		if n := counts["dead"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u25cf%d", n))
+		}
+		if len(parts) > 0 {
+			summaryStr := lipgloss.NewStyle().Foreground(colorDimFg).Render(strings.Join(parts, " "))
+			summaryPill := pillEntry{rendered: summaryStr, width: lipgloss.Width(summaryStr)}
+			// Prepend: shift all indices by 1.
+			allPills = append([]pillEntry{summaryPill}, allPills...)
+			if selectedIdx >= 0 {
+				selectedIdx++
+			}
+			sepBoundary++ // separator now one position further right
+		}
 	}
 
 	// Fit pills within budget, always including the selected pill.
@@ -294,7 +286,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		// Everything fits — render all.
 		var pills []string
 		for i, p := range allPills {
-			if hasSep && i == len(sessions) {
+			if hasSep && i == sepBoundary {
 				pills = append(pills, sepStr)
 			}
 			pills = append(pills, p.rendered)
@@ -317,7 +309,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		if visEnd+1 < totalPills {
 			nextW := allPills[visEnd+1].width + spaceWidth
 			// Account for separator if crossing the boundary.
-			if hasSep && visEnd+1 == len(sessions) {
+			if hasSep && visEnd+1 == sepBoundary {
 				nextW += sepWidth
 			}
 			// Reserve space for left overflow indicator.
@@ -338,7 +330,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		// Try left.
 		if visStart-1 >= 0 {
 			nextW := allPills[visStart-1].width + spaceWidth
-			if hasSep && visStart == len(sessions) {
+			if hasSep && visStart == sepBoundary {
 				nextW += sepWidth
 			}
 			leftOverflow := 0
@@ -366,7 +358,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		pills = append(pills, overflowStyle.Render(fmt.Sprintf("+%d", visStart)))
 	}
 	for i := visStart; i <= visEnd; i++ {
-		if hasSep && i == len(sessions) && visStart <= len(sessions)-1 {
+		if hasSep && i == sepBoundary && visStart <= sepBoundary-1 {
 			pills = append(pills, sepStr)
 		}
 		pills = append(pills, allPills[i].rendered)
