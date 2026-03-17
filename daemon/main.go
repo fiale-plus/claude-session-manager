@@ -201,8 +201,10 @@ func install() {
 	}
 	fmt.Printf("installed plist to %s\n", plistPath)
 
-	// Load service.
+	// Unload and wait for the old daemon to exit before loading the new one.
+	// Without the wait, the old process can overwrite prs.json with stale state.
 	_ = exec.Command("launchctl", "unload", plistPath).Run()
+	waitForOldDaemon()
 	if err := exec.Command("launchctl", "load", plistPath).Run(); err != nil {
 		log.Printf("warning: launchctl load failed: %v", err)
 	} else {
@@ -216,6 +218,19 @@ func install() {
 	installGhostty(home)
 
 	fmt.Println("installation complete")
+}
+
+// waitForOldDaemon polls pgrep for up to 2s waiting for the old csm-daemon
+// process to exit after launchctl unload.
+func waitForOldDaemon() {
+	for i := 0; i < 10; i++ {
+		out, err := exec.Command("pgrep", "-x", "csm-daemon").Output()
+		if err != nil || strings.TrimSpace(string(out)) == "" {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	log.Println("warning: old csm-daemon still running after 2s — proceeding anyway")
 }
 
 func uninstall() {

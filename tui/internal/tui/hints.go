@@ -24,6 +24,7 @@ func renderHints(queueVisible bool, hasPending bool, isPRSelected bool, width in
 		keys = append(keys, hint{"Enter", "open PR"})
 		keys = append(keys, hint{"a", "autopilot"})
 		keys = append(keys, hint{"m", "merge"})
+		keys = append(keys, hint{"M", "set method"})
 		keys = append(keys, hint{"+", "add PR"})
 		keys = append(keys, hint{"-", "remove"})
 	} else {

@@ -13,9 +13,10 @@ import (
 
 // Poller fetches PR data from GitHub via the gh CLI.
 type Poller struct {
-	mu       sync.RWMutex
-	tracked  map[string]*TrackedPR // "owner/repo#number" → PR
-	onChange func()                // called when PR state changes
+	mu          sync.RWMutex
+	tracked     map[string]*TrackedPR // "owner/repo#number" → PR
+	repoMethods map[string]string     // "owner/repo" → preferred merge method
+	onChange    func()                // called when PR state changes
 
 	storePath string // persistence path (~/.csm/prs.json)
 }
@@ -23,23 +24,30 @@ type Poller struct {
 // NewPoller creates a PR poller.
 func NewPoller(storePath string, onChange func()) *Poller {
 	p := &Poller{
-		tracked:   make(map[string]*TrackedPR),
-		onChange:  onChange,
-		storePath: storePath,
+		tracked:     make(map[string]*TrackedPR),
+		repoMethods: make(map[string]string),
+		onChange:    onChange,
+		storePath:   storePath,
 	}
 	p.load()
 	return p
 }
 
-// Add starts tracking a PR.
-func (p *Poller) Add(owner, repo string, number int) *TrackedPR {
+// Add starts tracking a PR. Returns the PR and a bool indicating whether this
+// is the first PR seen from this repo (newRepo=true means no merge method is
+// configured yet and the caller should prompt the user to pick one).
+func (p *Poller) Add(owner, repo string, number int) (*TrackedPR, bool) {
 	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	repoKey := fmt.Sprintf("%s/%s", owner, repo)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if pr, ok := p.tracked[key]; ok {
-		return pr
+		return pr, false
 	}
+
+	method := p.repoMethods[repoKey] // "" if repo is new
+	newRepo := method == ""
 
 	pr := &TrackedPR{
 		Owner:         owner,
@@ -48,7 +56,7 @@ func (p *Poller) Add(owner, repo string, number int) *TrackedPR {
 		AutopilotMode: PRAuto,
 		Hammer:        true,
 		MaxHammer:     3,
-		MergeMethod:   "squash",
+		MergeMethod:   method,
 		Timeline:      []PREvent{{Time: time.Now(), Icon: "📝", Message: "Added to tracking"}},
 	}
 	p.tracked[key] = pr
@@ -56,25 +64,53 @@ func (p *Poller) Add(owner, repo string, number int) *TrackedPR {
 	if p.onChange != nil {
 		p.onChange()
 	}
-	return pr
+	return pr, newRepo
+}
+
+// SetMergeMethod updates the merge method for a tracked PR and stores the
+// preference for the repo so future PRs inherit it.
+func (p *Poller) SetMergeMethod(owner, repo string, number int, method string) bool {
+	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	repoKey := fmt.Sprintf("%s/%s", owner, repo)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	pr, ok := p.tracked[key]
+	if !ok {
+		return false
+	}
+	pr.MergeMethod = method
+	p.repoMethods[repoKey] = method
+	pr.Timeline = append(pr.Timeline, PREvent{
+		Time:    time.Now(),
+		Icon:    "⚙",
+		Message: fmt.Sprintf("Merge method → %s", method),
+	})
+	p.save()
+	if p.onChange != nil {
+		p.onChange()
+	}
+	return true
 }
 
 // AddFromURL parses a GitHub PR URL and starts tracking.
-func (p *Poller) AddFromURL(url string) (*TrackedPR, error) {
+// Returns the PR, a newRepo flag, and any parse error.
+func (p *Poller) AddFromURL(url string) (*TrackedPR, bool, error) {
 	// Parse: https://github.com/owner/repo/pull/123
 	url = strings.TrimSpace(url)
 	url = strings.TrimSuffix(url, "/")
 	parts := strings.Split(url, "/")
 	if len(parts) < 5 || parts[len(parts)-2] != "pull" {
-		return nil, fmt.Errorf("invalid PR URL: %s", url)
+		return nil, false, fmt.Errorf("invalid PR URL: %s", url)
 	}
 	owner := parts[len(parts)-4]
 	repo := parts[len(parts)-3]
 	var number int
 	if _, err := fmt.Sscanf(parts[len(parts)-1], "%d", &number); err != nil {
-		return nil, fmt.Errorf("invalid PR number in URL: %s", url)
+		return nil, false, fmt.Errorf("invalid PR number in URL: %s", url)
 	}
-	return p.Add(owner, repo, number), nil
+	pr, newRepo := p.Add(owner, repo, number)
+	return pr, newRepo, nil
 }
 
 // Remove stops tracking a PR.
@@ -312,8 +348,14 @@ func (p *Poller) pollOne(owner, repo string, number int) bool {
 		})
 	}
 
-	// Auto-merge if conditions met.
-	if pr.ShouldAutoMerge() {
+	// Reset MergeTriggered if checks have regressed so we can re-fire later.
+	if pr.State == StateChecksFailing || pr.State == StateChecksRunning {
+		pr.MergeTriggered = false
+	}
+
+	// Auto-merge once — don't re-fire on every poll cycle.
+	if pr.ShouldAutoMerge() && !pr.MergeTriggered {
+		pr.MergeTriggered = true
 		go p.triggerMerge(pr)
 	}
 
@@ -475,11 +517,27 @@ func defaultGhBin() string {
 
 // --- persistence ---
 
+// pollerStore is the on-disk format for prs.json.
+type pollerStore struct {
+	PRs         map[string]*TrackedPR `json:"prs"`
+	RepoMethods map[string]string     `json:"repo_methods,omitempty"`
+}
+
 func (p *Poller) load() {
 	data, err := os.ReadFile(p.storePath)
 	if err != nil {
 		return
 	}
+	// Try new wrapper format first.
+	var store pollerStore
+	if err := json.Unmarshal(data, &store); err == nil && store.PRs != nil {
+		p.tracked = store.PRs
+		if store.RepoMethods != nil {
+			p.repoMethods = store.RepoMethods
+		}
+		return
+	}
+	// Backward compat: old format was a bare map[string]*TrackedPR.
 	var prs map[string]*TrackedPR
 	if err := json.Unmarshal(data, &prs); err != nil {
 		return
@@ -488,7 +546,11 @@ func (p *Poller) load() {
 }
 
 func (p *Poller) save() {
-	data, err := json.MarshalIndent(p.tracked, "", "  ")
+	store := pollerStore{
+		PRs:         p.tracked,
+		RepoMethods: p.repoMethods,
+	}
+	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
 		return
 	}

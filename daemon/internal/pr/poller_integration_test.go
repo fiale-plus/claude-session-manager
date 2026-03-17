@@ -315,7 +315,7 @@ func TestPollOne_StateTransitionTimeline(t *testing.T) {
 
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, nil)
-	tracked := p.Add("test", "repo", 1)
+	tracked, _ := p.Add("test", "repo", 1)
 	// Disable auto-merge and hammer to avoid extra timeline events.
 	tracked.AutopilotMode = PROff
 	tracked.Hammer = false
@@ -533,7 +533,7 @@ func TestTriggerMerge_Squash(t *testing.T) {
 	changed := false
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, func() { changed = true })
-	tracked := p.Add("test", "repo", 1)
+	tracked, _ := p.Add("test", "repo", 1)
 	tracked.MergeMethod = "squash"
 	changed = false // Reset after Add.
 
@@ -563,7 +563,7 @@ func TestTriggerMerge_Rebase(t *testing.T) {
 
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, nil)
-	tracked := p.Add("test", "repo", 1)
+	tracked, _ := p.Add("test", "repo", 1)
 	tracked.MergeMethod = "rebase"
 
 	p.triggerMerge(tracked)
@@ -588,7 +588,7 @@ func TestTriggerMerge_Merge(t *testing.T) {
 
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, nil)
-	tracked := p.Add("test", "repo", 1)
+	tracked, _ := p.Add("test", "repo", 1)
 	tracked.MergeMethod = "merge"
 
 	p.triggerMerge(tracked)
@@ -613,7 +613,7 @@ func TestTriggerMerge_Aviator(t *testing.T) {
 
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, nil)
-	tracked := p.Add("test", "repo", 1)
+	tracked, _ := p.Add("test", "repo", 1)
 	tracked.MergeMethod = "aviator"
 
 	p.triggerMerge(tracked)
@@ -638,7 +638,7 @@ func TestTriggerMerge_Failure(t *testing.T) {
 
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, nil)
-	tracked := p.Add("test", "repo", 1)
+	tracked, _ := p.Add("test", "repo", 1)
 	tracked.MergeMethod = "squash"
 
 	p.triggerMerge(tracked)
@@ -663,7 +663,7 @@ func TestTriggerMerge_RemovedDuringMerge(t *testing.T) {
 
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, nil)
-	tracked := p.Add("test", "repo", 1)
+	tracked, _ := p.Add("test", "repo", 1)
 	tracked.MergeMethod = "squash"
 
 	// Remove before triggerMerge runs its lock section.
@@ -685,7 +685,7 @@ func TestPollOne_HammerOnChecksFailing(t *testing.T) {
 
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, nil)
-	tracked := p.Add("test", "repo", 1)
+	tracked, _ := p.Add("test", "repo", 1)
 	tracked.Hammer = true
 	tracked.AutopilotMode = PRAuto
 	tracked.MaxHammer = 3
@@ -719,7 +719,7 @@ func TestPollOne_NoHammerOnSameState(t *testing.T) {
 
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, nil)
-	tracked := p.Add("test", "repo", 1)
+	tracked, _ := p.Add("test", "repo", 1)
 	tracked.Hammer = true
 	tracked.AutopilotMode = PRAuto
 	tracked.MaxHammer = 3
@@ -775,8 +775,9 @@ esac
 
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, nil)
-	tracked := p.Add("test", "repo", 1)
+	tracked, _ := p.Add("test", "repo", 1)
 	tracked.AutopilotMode = PRAuto
+	tracked.MergeMethod = "squash"
 
 	p.pollOne("test", "repo", 1)
 

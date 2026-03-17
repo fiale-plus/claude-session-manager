@@ -27,7 +27,7 @@ func newTestPollerWithCallback(t *testing.T) (*Poller, *int) {
 
 func TestAdd_New(t *testing.T) {
 	p := newTestPoller(t)
-	pr := p.Add("octocat", "hello-world", 42)
+	pr, _ := p.Add("octocat", "hello-world", 42)
 
 	if pr.Owner != "octocat" {
 		t.Errorf("owner = %q, want octocat", pr.Owner)
@@ -47,8 +47,8 @@ func TestAdd_New(t *testing.T) {
 	if pr.MaxHammer != 3 {
 		t.Errorf("max_hammer = %d, want 3", pr.MaxHammer)
 	}
-	if pr.MergeMethod != "squash" {
-		t.Errorf("merge_method = %q, want squash", pr.MergeMethod)
+	if pr.MergeMethod != "" {
+		t.Errorf("merge_method = %q, want empty (unset for new repo)", pr.MergeMethod)
 	}
 	if len(pr.Timeline) != 1 {
 		t.Errorf("timeline should have 1 event, got %d", len(pr.Timeline))
@@ -57,8 +57,8 @@ func TestAdd_New(t *testing.T) {
 
 func TestAdd_Duplicate(t *testing.T) {
 	p := newTestPoller(t)
-	pr1 := p.Add("octocat", "repo", 1)
-	pr2 := p.Add("octocat", "repo", 1)
+	pr1, _ := p.Add("octocat", "repo", 1)
+	pr2, _ := p.Add("octocat", "repo", 1)
 
 	if pr1 != pr2 {
 		t.Error("adding same PR twice should return the same pointer")
@@ -125,7 +125,7 @@ func TestAddFromURL_Valid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := newTestPoller(t)
-			pr, err := p.AddFromURL(tt.url)
+			pr, _, err := p.AddFromURL(tt.url)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -158,7 +158,7 @@ func TestAddFromURL_Invalid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := newTestPoller(t)
-			_, err := p.AddFromURL(tt.url)
+			_, _, err := p.AddFromURL(tt.url)
 			if err == nil {
 				t.Errorf("expected error for URL %q", tt.url)
 			}
@@ -293,11 +293,11 @@ func TestFailingCount_None(t *testing.T) {
 
 func TestFailingCount_Some(t *testing.T) {
 	p := newTestPoller(t)
-	pr1 := p.Add("owner", "repo", 1)
+	pr1, _ := p.Add("owner", "repo", 1)
 	pr1.State = StateChecksFailing
-	pr2 := p.Add("owner", "repo", 2)
+	pr2, _ := p.Add("owner", "repo", 2)
 	pr2.State = StateChecksPassing
-	pr3 := p.Add("owner", "repo", 3)
+	pr3, _ := p.Add("owner", "repo", 3)
 	pr3.State = StateChecksFailing
 
 	if n := p.FailingCount(); n != 2 {
@@ -313,7 +313,7 @@ func TestPersistence_SaveAndLoad(t *testing.T) {
 	// Create a poller and add PRs.
 	p1 := NewPoller(storePath, nil)
 	p1.Add("octocat", "hello-world", 42)
-	pr2 := p1.Add("other", "project", 7)
+	pr2, _ := p1.Add("other", "project", 7)
 	pr2.Title = "Test PR"
 
 	// Manually set title via direct access (simulating pollOne).
@@ -375,11 +375,11 @@ func TestPersistence_AddPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read store file: %v", err)
 	}
-	var stored map[string]*TrackedPR
+	var stored pollerStore
 	if err := json.Unmarshal(data, &stored); err != nil {
 		t.Fatalf("failed to parse store file: %v", err)
 	}
-	if _, ok := stored["owner/repo#1"]; !ok {
+	if _, ok := stored.PRs["owner/repo#1"]; !ok {
 		t.Error("store file should contain owner/repo#1")
 	}
 }
@@ -505,7 +505,7 @@ func TestGhPRDataParsing_DraftPR(t *testing.T) {
 func TestAddFromURL_MinimalPath(t *testing.T) {
 	p := newTestPoller(t)
 	// URL with minimal path segments but valid structure.
-	pr, err := p.AddFromURL("https://github.com/a/b/pull/1")
+	pr, _, err := p.AddFromURL("https://github.com/a/b/pull/1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -516,7 +516,7 @@ func TestAddFromURL_MinimalPath(t *testing.T) {
 
 func TestAddFromURL_LargeNumber(t *testing.T) {
 	p := newTestPoller(t)
-	pr, err := p.AddFromURL("https://github.com/a/b/pull/99999")
+	pr, _, err := p.AddFromURL("https://github.com/a/b/pull/99999")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestConcurrentCycleAutopilot(t *testing.T) {
 
 func TestConcurrentFailingCount(t *testing.T) {
 	p := newTestPoller(t)
-	pr := p.Add("owner", "repo", 1)
+	pr, _ := p.Add("owner", "repo", 1)
 	pr.State = StateChecksFailing
 	done := make(chan struct{})
 	go func() {

@@ -61,12 +61,13 @@ type TrackedPR struct {
 	Timeline   []PREvent `json:"timeline"`
 
 	// Tracking config
-	AutopilotMode string `json:"autopilot_mode"` // "off", "auto", "yolo"
-	Hammer        bool   `json:"hammer"`          // auto-fix CI failures
-	HammerCount   int    `json:"hammer_count"`    // fix attempts so far
-	MaxHammer     int    `json:"max_hammer"`      // max fix attempts (default 3)
-	MergeMethod   string `json:"merge_method"`    // "squash", "merge", "rebase", "aviator"
-	RunReview     bool   `json:"run_review"`      // run code-review skill on creation
+	AutopilotMode  string `json:"autopilot_mode"`  // "off", "auto", "yolo"
+	Hammer         bool   `json:"hammer"`           // auto-fix CI failures
+	HammerCount    int    `json:"hammer_count"`     // fix attempts so far
+	MaxHammer      int    `json:"max_hammer"`       // max fix attempts (default 3)
+	MergeMethod    string `json:"merge_method"`     // "squash", "merge", "rebase", "aviator", "" = unset
+	MergeTriggered bool   `json:"merge_triggered"`  // true once auto-merge has been fired; resets on check regression
+	RunReview      bool   `json:"run_review"`       // run code-review skill on creation
 }
 
 // PR autopilot modes.
@@ -87,14 +88,25 @@ func (pr *TrackedPR) ShouldAutoMerge() bool {
 	if pr.Mergeable != "MERGEABLE" {
 		return false
 	}
+	// Merge method must be configured — auto-merge is blocked until the user picks one.
+	if pr.MergeMethod == "" {
+		return false
+	}
 
-	// All checks must pass (ignore still-running ones).
+	// No check may be failing.
 	for _, c := range pr.Checks {
 		if c.Conclusion == "FAILURE" {
 			return false
 		}
 	}
-	// At least one check must have completed.
+
+	if pr.AutopilotMode == PRYolo {
+		// YOLO: no checks required, no approval required.
+		// Repos with no CI (empty Checks) can still be merged.
+		return true
+	}
+
+	// AUTO: at least one completed check required.
 	hasCompleted := false
 	for _, c := range pr.Checks {
 		if c.Status == "COMPLETED" {
@@ -106,22 +118,13 @@ func (pr *TrackedPR) ShouldAutoMerge() bool {
 		return false
 	}
 
-	// Check approval.
-	hasApproval := false
+	// AUTO: needs at least one approval.
 	for _, r := range pr.Reviews {
 		if r.State == "APPROVED" {
-			hasApproval = true
-			break
+			return true
 		}
 	}
-
-	if pr.AutopilotMode == PRYolo {
-		// YOLO doesn't need human approval.
-		return true
-	}
-
-	// AUTO needs at least one approval.
-	return hasApproval
+	return false
 }
 
 // ShouldHammer returns true if the daemon should spawn a fix-CI agent.

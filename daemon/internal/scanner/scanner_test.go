@@ -14,15 +14,19 @@ import (
 // --- isClaudeCLI ---
 
 func TestIsClaudeCLI(t *testing.T) {
+	const versionedBin = "/Users/x/.local/share/claude/versions/2.1.77"
+
 	tests := []struct {
 		cmd  string
 		want bool
 	}{
-		// Should match
+		// Should match — named "claude"
 		{"claude", true},
 		{"/usr/local/bin/claude", true},
 		{"/Users/x/.local/share/claude/versions/2.1.76/claude", true},
 		{"/opt/homebrew/bin/claude", true},
+		// Should match — versioned binary resolved via which+EvalSymlinks
+		{versionedBin, true},
 
 		// Should NOT match
 		{"Claude.app", false},
@@ -39,7 +43,7 @@ func TestIsClaudeCLI(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.cmd, func(t *testing.T) {
-			got := isClaudeCLI(tt.cmd)
+			got := isClaudeCLI(tt.cmd, versionedBin)
 			if got != tt.want {
 				t.Errorf("isClaudeCLI(%q) = %v, want %v", tt.cmd, got, tt.want)
 			}
