@@ -408,3 +408,113 @@ func TestShouldHammer_CustomMaxAttempts(t *testing.T) {
 		t.Error("at custom max=5, count=5 should not hammer")
 	}
 }
+
+// === IsAgentRunning ===
+
+func TestIsAgentRunning(t *testing.T) {
+	pr := TrackedPR{}
+	if pr.IsAgentRunning() {
+		t.Error("empty AgentRunning should not be running")
+	}
+	pr.AgentRunning = "fix_ci"
+	if !pr.IsAgentRunning() {
+		t.Error("AgentRunning=fix_ci should be running")
+	}
+}
+
+// === ShouldReview ===
+
+func TestShouldReview_ChecksPassing(t *testing.T) {
+	pr := TrackedPR{AutopilotMode: PRAuto, State: StateChecksPassing}
+	if !pr.ShouldReview() {
+		t.Error("AUTO + checks_passing + no review state should review")
+	}
+}
+
+func TestShouldReview_AutopilotOff(t *testing.T) {
+	pr := TrackedPR{AutopilotMode: PROff, State: StateChecksPassing}
+	if pr.ShouldReview() {
+		t.Error("autopilot off should not review")
+	}
+}
+
+func TestShouldReview_ChecksFailing(t *testing.T) {
+	pr := TrackedPR{AutopilotMode: PRAuto, State: StateChecksFailing}
+	if pr.ShouldReview() {
+		t.Error("checks failing should not review")
+	}
+}
+
+func TestShouldReview_AlreadyReviewed(t *testing.T) {
+	pr := TrackedPR{AutopilotMode: PRAuto, State: StateChecksPassing, ReviewState: "clean"}
+	if pr.ShouldReview() {
+		t.Error("already reviewed should not review again")
+	}
+}
+
+func TestShouldReview_Approved(t *testing.T) {
+	pr := TrackedPR{AutopilotMode: PRAuto, State: StateApproved}
+	if !pr.ShouldReview() {
+		t.Error("approved state should also trigger review")
+	}
+}
+
+// === ShouldFixReview ===
+
+func TestShouldFixReview_HasIssues(t *testing.T) {
+	pr := TrackedPR{AutopilotMode: PRAuto, ReviewState: "has_issues"}
+	if !pr.ShouldFixReview() {
+		t.Error("has_issues + cycle 0 should fix review")
+	}
+}
+
+func TestShouldFixReview_MaxCycles(t *testing.T) {
+	pr := TrackedPR{AutopilotMode: PRAuto, ReviewState: "has_issues", ReviewCycle: 2}
+	if pr.ShouldFixReview() {
+		t.Error("at max cycles should not fix review")
+	}
+}
+
+func TestShouldFixReview_Clean(t *testing.T) {
+	pr := TrackedPR{AutopilotMode: PRAuto, ReviewState: "clean"}
+	if pr.ShouldFixReview() {
+		t.Error("clean review should not fix")
+	}
+}
+
+func TestShouldFixReview_Off(t *testing.T) {
+	pr := TrackedPR{AutopilotMode: PROff, ReviewState: "has_issues"}
+	if pr.ShouldFixReview() {
+		t.Error("autopilot off should not fix review")
+	}
+}
+
+// === HasActionableFindings ===
+
+func TestHasActionableFindings_Critical(t *testing.T) {
+	pr := TrackedPR{ReviewFindings: []ReviewFinding{{Severity: SeverityCritical}}}
+	if !pr.HasActionableFindings() {
+		t.Error("critical finding should be actionable")
+	}
+}
+
+func TestHasActionableFindings_Important(t *testing.T) {
+	pr := TrackedPR{ReviewFindings: []ReviewFinding{{Severity: SeverityImportant}}}
+	if !pr.HasActionableFindings() {
+		t.Error("important finding should be actionable")
+	}
+}
+
+func TestHasActionableFindings_MinorOnly(t *testing.T) {
+	pr := TrackedPR{ReviewFindings: []ReviewFinding{{Severity: SeverityMinor}}}
+	if pr.HasActionableFindings() {
+		t.Error("minor-only findings should not be actionable")
+	}
+}
+
+func TestHasActionableFindings_Empty(t *testing.T) {
+	pr := TrackedPR{}
+	if pr.HasActionableFindings() {
+		t.Error("no findings should not be actionable")
+	}
+}

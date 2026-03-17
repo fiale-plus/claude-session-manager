@@ -70,6 +70,21 @@ type TrackedPR struct {
 	MergeMethod   string    `json:"merge_method"`
 	CreatedAt     time.Time `json:"created_at"`
 	Timeline      []PREvent `json:"timeline"`
+
+	// Agent pipeline
+	AgentRunning   string          `json:"agent_running,omitempty"`
+	AgentStartedAt time.Time       `json:"agent_started_at,omitempty"`
+	ReviewState    string          `json:"review_state,omitempty"`
+	ReviewFindings []ReviewFinding `json:"review_findings,omitempty"`
+	AgentCostUSD   float64         `json:"agent_cost_usd,omitempty"`
+}
+
+// ReviewFinding is a code review issue found by an agent.
+type ReviewFinding struct {
+	Severity string `json:"severity"`
+	File     string `json:"file"`
+	Line     int    `json:"line,omitempty"`
+	Message  string `json:"message"`
 }
 
 type PRCheck struct {

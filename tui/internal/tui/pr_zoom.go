@@ -3,10 +3,18 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/pchaganti/claude-session-manager/tui/internal/client"
 )
+
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+}
 
 // renderPRZoom renders the PR detail panel.
 func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) string {
@@ -62,6 +70,10 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 	} else {
 		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorWaiting).Render("⎇ unset"))
 	}
+	if pr.AgentCostUSD > 0 {
+		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorDimFg).
+			Render(fmt.Sprintf("$%.2f", pr.AgentCostUSD)))
+	}
 	headerLines = append(headerLines, "  "+lipgloss.NewStyle().Foreground(colorDimFg).
 		Render(strings.Join(infoParts, "  ")))
 
@@ -100,6 +112,57 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 			}
 			bodyLines = append(bodyLines, fmt.Sprintf("  %s %s  %s%s%s", icon, name, status, dur, detail))
 		}
+	}
+
+	// Agent status section.
+	if pr.AgentRunning != "" {
+		bodyLines = append(bodyLines, sep)
+		elapsed := time.Since(pr.AgentStartedAt)
+		agentLabel := pr.AgentRunning
+		bodyLines = append(bodyLines, styleSectionLabel.Render("── Agent"))
+		bodyLines = append(bodyLines, fmt.Sprintf("  %s %s running (%s)",
+			lipgloss.NewStyle().Foreground(colorWaiting).Render("🤖"),
+			lipgloss.NewStyle().Foreground(colorFg).Render(agentLabel),
+			lipgloss.NewStyle().Foreground(colorDimFg).Render(formatDuration(elapsed)),
+		))
+	}
+
+	// Code review findings section.
+	if len(pr.ReviewFindings) > 0 {
+		bodyLines = append(bodyLines, sep)
+		actionable := 0
+		for _, f := range pr.ReviewFindings {
+			if f.Severity == "critical" || f.Severity == "important" {
+				actionable++
+			}
+		}
+		bodyLines = append(bodyLines, styleSectionLabel.Render(
+			fmt.Sprintf("── Code Review (%d issues, %d actionable)", len(pr.ReviewFindings), actionable)))
+		for _, f := range pr.ReviewFindings {
+			var icon string
+			switch f.Severity {
+			case "critical":
+				icon = styleDestructive.Render("✗")
+			case "important":
+				icon = lipgloss.NewStyle().Foreground(colorOrange).Render("⚠")
+			default:
+				icon = lipgloss.NewStyle().Foreground(colorDimFg).Render("○")
+			}
+			sev := lipgloss.NewStyle().Foreground(colorDimFg).Render("[" + f.Severity + "]")
+			loc := f.File
+			if f.Line > 0 {
+				loc += fmt.Sprintf(":%d", f.Line)
+			}
+			locStyled := lipgloss.NewStyle().Foreground(colorFg).Render(loc)
+			msg := lipgloss.NewStyle().Foreground(colorDimFg).Italic(true).
+				Render(truncateMiddle(f.Message, innerWidth-40))
+			bodyLines = append(bodyLines, fmt.Sprintf("  %s %s %s — %s", icon, sev, locStyled, msg))
+		}
+	} else if pr.ReviewState == "clean" {
+		bodyLines = append(bodyLines, sep)
+		bodyLines = append(bodyLines, styleSectionLabel.Render("── Code Review"))
+		bodyLines = append(bodyLines, "  "+styleSafe.Render("✓")+" "+
+			lipgloss.NewStyle().Foreground(colorDimFg).Render("Clean — no issues found"))
 	}
 
 	// Reviews section.

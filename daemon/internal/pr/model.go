@@ -39,6 +39,23 @@ type PREvent struct {
 	Message string    `json:"message"`
 }
 
+// ReviewSeverity classifies code review findings.
+type ReviewSeverity string
+
+const (
+	SeverityCritical  ReviewSeverity = "critical"
+	SeverityImportant ReviewSeverity = "important"
+	SeverityMinor     ReviewSeverity = "minor"
+)
+
+// ReviewFinding is a single issue found by code review.
+type ReviewFinding struct {
+	Severity ReviewSeverity `json:"severity"`
+	File     string         `json:"file"`
+	Line     int            `json:"line,omitempty"`
+	Message  string         `json:"message"`
+}
+
 // TrackedPR represents a PR being monitored by the daemon.
 type TrackedPR struct {
 	Owner      string    `json:"owner"`
@@ -68,6 +85,15 @@ type TrackedPR struct {
 	MergeMethod    string `json:"merge_method"`     // "squash", "merge", "rebase", "aviator", "" = unset
 	MergeTriggered bool   `json:"merge_triggered"`  // true once auto-merge has been fired; resets on check regression
 	RunReview      bool   `json:"run_review"`       // run code-review skill on creation
+
+	// Agent pipeline state
+	AgentRunning    string          `json:"agent_running,omitempty"`     // "" | "fix_ci" | "review" | "fix_review"
+	AgentStartedAt  time.Time       `json:"agent_started_at,omitempty"`
+	ReviewState     string          `json:"review_state,omitempty"`     // "" | "pending" | "clean" | "has_issues"
+	ReviewFindings  []ReviewFinding `json:"review_findings,omitempty"`
+	ReviewCycle     int             `json:"review_cycle,omitempty"`
+	MaxReviewCycles int             `json:"max_review_cycles,omitempty"` // default 2
+	AgentCostUSD    float64         `json:"agent_cost_usd,omitempty"`
 }
 
 // PR autopilot modes.
@@ -169,4 +195,49 @@ func (pr *TrackedPR) HasFailingChecks() bool {
 // NeedsAttention returns true if the PR needs user action.
 func (pr *TrackedPR) NeedsAttention() bool {
 	return pr.State == StateChecksFailing
+}
+
+// IsAgentRunning returns true if a claude -p agent is currently working on this PR.
+func (pr *TrackedPR) IsAgentRunning() bool {
+	return pr.AgentRunning != ""
+}
+
+// ShouldReview returns true if the PR should be code-reviewed.
+func (pr *TrackedPR) ShouldReview() bool {
+	if pr.AutopilotMode == PROff {
+		return false
+	}
+	if pr.State != StateChecksPassing && pr.State != StateApproved {
+		return false
+	}
+	// Already reviewed or in progress.
+	if pr.ReviewState != "" {
+		return false
+	}
+	return true
+}
+
+// ShouldFixReview returns true if review findings should be addressed.
+func (pr *TrackedPR) ShouldFixReview() bool {
+	if pr.AutopilotMode == PROff {
+		return false
+	}
+	if pr.ReviewState != "has_issues" {
+		return false
+	}
+	maxCycles := pr.MaxReviewCycles
+	if maxCycles == 0 {
+		maxCycles = 2
+	}
+	return pr.ReviewCycle < maxCycles
+}
+
+// HasActionableFindings returns true if there are Critical or Important findings.
+func (pr *TrackedPR) HasActionableFindings() bool {
+	for _, f := range pr.ReviewFindings {
+		if f.Severity == SeverityCritical || f.Severity == SeverityImportant {
+			return true
+		}
+	}
+	return false
 }

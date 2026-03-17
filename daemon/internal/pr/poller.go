@@ -348,9 +348,12 @@ func (p *Poller) pollOne(owner, repo string, number int) bool {
 		})
 	}
 
-	// Reset MergeTriggered if checks have regressed so we can re-fire later.
+	// Reset MergeTriggered and review state if checks have regressed.
 	if pr.State == StateChecksFailing || pr.State == StateChecksRunning {
 		pr.MergeTriggered = false
+		pr.ReviewState = ""
+		pr.ReviewFindings = nil
+		pr.ReviewCycle = 0
 	}
 
 	// Auto-merge once — don't re-fire on every poll cycle.
@@ -359,16 +362,62 @@ func (p *Poller) pollOne(owner, repo string, number int) bool {
 		go p.triggerMerge(pr)
 	}
 
-	// Auto-hammer if CI failing and hammer mode on.
-	if pr.ShouldHammer() && pr.State == StateChecksFailing && pr.State != oldState {
-		pr.HammerCount++
-		pr.Timeline = append(pr.Timeline, PREvent{
-			Time:    time.Now(),
-			Icon:    "🔨",
-			Message: fmt.Sprintf("Hammer attempt %d/%d", pr.HammerCount, pr.MaxHammer),
-		})
-		log.Printf("pr: hammer %s/%s#%d attempt %d", pr.Owner, pr.Repo, pr.Number, pr.HammerCount)
-		// TODO: spawn fix-CI agent here
+	// === Agent pipeline (AUTO/YOLO) ===
+	if pr.AutopilotMode != PROff {
+		// Clear stale agent state (crashed/killed process).
+		if pr.IsAgentRunning() && time.Since(pr.AgentStartedAt) > 20*time.Minute {
+			pr.Timeline = append(pr.Timeline, PREvent{
+				Time: time.Now(), Icon: "✗",
+				Message: fmt.Sprintf("Agent %s timed out — clearing", pr.AgentRunning),
+			})
+			log.Printf("pr: agent %s for %s timed out", pr.AgentRunning, key)
+			pr.AgentRunning = ""
+		}
+
+		if !pr.IsAgentRunning() {
+			// Step 1: Fix CI — when checks just started failing.
+			if pr.ShouldHammer() && pr.State == StateChecksFailing && pr.State != oldState {
+				pr.HammerCount++
+				pr.AgentRunning = "fix_ci"
+				pr.AgentStartedAt = time.Now()
+				pr.Timeline = append(pr.Timeline, PREvent{
+					Time: time.Now(), Icon: "🔨",
+					Message: fmt.Sprintf("Hammer %d/%d — spawning fix-CI agent", pr.HammerCount, pr.MaxHammer),
+				})
+				log.Printf("pr: hammer %s attempt %d — spawning agent", key, pr.HammerCount)
+				p.spawnFixCI(pr)
+			}
+
+			// Step 2: Code review — when checks pass and not yet reviewed.
+			if pr.ShouldReview() {
+				pr.AgentRunning = "review"
+				pr.AgentStartedAt = time.Now()
+				pr.ReviewState = "pending"
+				pr.Timeline = append(pr.Timeline, PREvent{
+					Time: time.Now(), Icon: "🔍",
+					Message: "Spawning code review agent",
+				})
+				log.Printf("pr: spawning code review for %s", key)
+				p.spawnCodeReview(pr)
+			}
+
+			// Step 3: Fix review findings — when review found actionable issues.
+			if pr.ShouldFixReview() {
+				pr.AgentRunning = "fix_review"
+				pr.AgentStartedAt = time.Now()
+				pr.ReviewCycle++
+				maxCycles := pr.MaxReviewCycles
+				if maxCycles == 0 {
+					maxCycles = 2
+				}
+				pr.Timeline = append(pr.Timeline, PREvent{
+					Time: time.Now(), Icon: "🔧",
+					Message: fmt.Sprintf("Fixing review issues (cycle %d/%d)", pr.ReviewCycle, maxCycles),
+				})
+				log.Printf("pr: spawning fix-review for %s cycle %d", key, pr.ReviewCycle)
+				p.spawnFixReview(pr)
+			}
+		}
 	}
 
 	return pr.State != oldState
