@@ -102,6 +102,35 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 	}
 	sessions = sortedSessions
 
+	// Filter dead sessions when there are many sessions (>= 8) and none of
+	// them have pending tools or are currently selected. Show a compact count.
+	deadCount := 0
+	if len(sessions) >= 8 {
+		var activeAndIdle []client.Session
+		for _, s := range sessions {
+			isDead := s.State == "dead"
+			isSelectedSession := s.SessionID == selectedSessionID
+			hasPending := len(s.PendingTools) > 0
+			if isDead && !isSelectedSession && !hasPending {
+				deadCount++
+			} else {
+				activeAndIdle = append(activeAndIdle, s)
+			}
+		}
+		if deadCount > 0 {
+			// Remap selectedIdx for the shorter slice.
+			if selectedSessionID != "" {
+				for i, s := range activeAndIdle {
+					if s.SessionID == selectedSessionID {
+						selectedIdx = i
+						break
+					}
+				}
+			}
+			sessions = activeAndIdle
+		}
+	}
+
 	// Pre-compute disambiguated names for sessions.
 	nameMap := disambiguateNames(sessions)
 
@@ -128,6 +157,15 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 			width:      lipgloss.Width(p),
 			isSelected: i == selectedIdx,
 			state:      s.State,
+		})
+	}
+
+	// Append compact "(●N dead)" indicator if dead sessions were filtered.
+	if deadCount > 0 {
+		deadStr := lipgloss.NewStyle().Foreground(colorDimFg).Render(fmt.Sprintf("(\u25cf%d)", deadCount))
+		allPills = append(allPills, pillEntry{
+			rendered: deadStr,
+			width:    lipgloss.Width(deadStr),
 		})
 	}
 
