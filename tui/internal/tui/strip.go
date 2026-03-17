@@ -118,8 +118,45 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		isSelected bool
 	}
 
+	// Build a compact state-group summary prefix when there are many sessions.
+	// Format: "▶2 ⏸1 ✔5 ●2" — lets user scan state distribution instantly.
+	var summaryPill pillEntry
+	hasSummary := false
+	if len(sessions) >= 5 {
+		counts := map[string]int{}
+		for _, s := range sessions {
+			counts[s.State]++
+		}
+		var parts []string
+		if n := counts["running"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u25b6%d", n))
+		}
+		if n := counts["waiting"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u23f8%d", n))
+		}
+		if n := counts["idle"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u2714%d", n))
+		}
+		if n := counts["dead"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u25cf%d", n))
+		}
+		if len(parts) > 0 {
+			summaryStr := lipgloss.NewStyle().
+				Foreground(colorDimFg).
+				Render(strings.Join(parts, " "))
+			summaryPill = pillEntry{
+				rendered: summaryStr,
+				width:    lipgloss.Width(summaryStr),
+			}
+			hasSummary = true
+		}
+	}
+
 	// Build all pill entries.
 	var allPills []pillEntry
+	if hasSummary {
+		allPills = append(allPills, summaryPill)
+	}
 	for i, s := range sessions {
 		p := renderPillWithName(s, nameMap[s.SessionID], i == selectedIdx, glowPos)
 		allPills = append(allPills, pillEntry{
@@ -127,6 +164,11 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 			width:      lipgloss.Width(p),
 			isSelected: i == selectedIdx,
 		})
+	}
+
+	// Adjust selectedIdx to account for prepended summary pill.
+	if hasSummary {
+		selectedIdx++ // shift: summary occupies index 0
 	}
 
 	// Filter terminal PRs when active ones exist: hide merged/closed PRs from

@@ -232,6 +232,52 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	return strings.Join(renderedLines, "\n")
 }
 
+// renderFleetMap renders a compact 1-line overview of all sessions as state
+// glyphs, e.g. "Sessions: 3▶ 2⏸ 1✔ ●" to give context from any zoom view.
+// Returns empty string when there are fewer than 3 sessions.
+func renderFleetMap(sessions []client.Session, currentSID string, width int) string {
+	if len(sessions) < 3 {
+		return ""
+	}
+
+	label := lipgloss.NewStyle().Foreground(colorDimFg).Render("  Sessions: ")
+
+	var glyphs []string
+	for _, s := range sessions {
+		var glyph string
+		if s.SessionID == currentSID {
+			// Highlight current session with brackets.
+			glyph = lipgloss.NewStyle().
+				Foreground(colorFg).
+				Bold(true).
+				Render("[" + stateIcon(s.State) + "]")
+		} else if len(s.PendingTools) > 0 {
+			// Pending-approval sessions get orange attention marker.
+			glyph = lipgloss.NewStyle().
+				Foreground(colorOrange).
+				Bold(true).
+				Render(stateIcon(s.State))
+		} else {
+			glyph = lipgloss.NewStyle().
+				Foreground(stateColor(s.State)).
+				Render(stateIcon(s.State))
+		}
+		glyphs = append(glyphs, glyph)
+	}
+
+	line := label + strings.Join(glyphs, "")
+	// Truncate to width to prevent wrapping.
+	if lipgloss.Width(line) > width {
+		// Trim glyphs from end until fits.
+		for len(glyphs) > 3 {
+			glyphs = glyphs[:len(glyphs)-1]
+		}
+		line = label + strings.Join(glyphs, "") +
+			lipgloss.NewStyle().Foreground(colorSubtle).Render("…")
+	}
+	return line
+}
+
 func activityIcon(actType string) string {
 	switch actType {
 	case "tool_use":
