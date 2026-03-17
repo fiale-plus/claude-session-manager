@@ -86,6 +86,83 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 	sep := lipgloss.NewStyle().Foreground(colorBorder).
 		Render(strings.Repeat("─", min(innerWidth, 60)))
 
+	// ── Merge readiness summary line ──
+	{
+		var summaryParts []string
+
+		// Approval status.
+		approved := false
+		changesRequested := false
+		for _, r := range pr.Reviews {
+			if r.State == "APPROVED" {
+				approved = true
+			}
+			if r.State == "CHANGES_REQUESTED" {
+				changesRequested = true
+			}
+		}
+		if changesRequested {
+			summaryParts = append(summaryParts,
+				styleDestructive.Render("✗")+" "+
+					lipgloss.NewStyle().Foreground(colorDestructive).Render("changes requested"))
+		} else if approved {
+			summaryParts = append(summaryParts,
+				styleSafe.Render("✓")+" "+
+					lipgloss.NewStyle().Foreground(colorDimFg).Render("approved"))
+		} else if len(pr.Reviews) == 0 {
+			summaryParts = append(summaryParts,
+				lipgloss.NewStyle().Foreground(colorDimFg).Render("○ no review"))
+		}
+
+		// Checks summary.
+		if len(pr.Checks) > 0 {
+			passing, total := 0, len(pr.Checks)
+			for _, c := range pr.Checks {
+				if c.Conclusion == "SUCCESS" || c.Conclusion == "NEUTRAL" {
+					passing++
+				}
+			}
+			if passing == total {
+				summaryParts = append(summaryParts,
+					styleSafe.Render("✓")+" "+
+						lipgloss.NewStyle().Foreground(colorDimFg).
+						Render(fmt.Sprintf("checks (%d/%d)", passing, total)))
+			} else {
+				summaryParts = append(summaryParts,
+					styleDestructive.Render("✗")+" "+
+						lipgloss.NewStyle().Foreground(colorDestructive).
+						Render(fmt.Sprintf("checks (%d/%d)", passing, total)))
+			}
+		}
+
+		// Mergeable.
+		switch pr.Mergeable {
+		case "MERGEABLE":
+			summaryParts = append(summaryParts,
+				styleSafe.Render("✓")+" "+
+					lipgloss.NewStyle().Foreground(colorDimFg).Render("mergeable"))
+		case "CONFLICTING":
+			summaryParts = append(summaryParts,
+				styleDestructive.Render("✗")+" "+
+					lipgloss.NewStyle().Foreground(colorDestructive).Render("conflicts"))
+		}
+
+		// Merge method.
+		if pr.MergeMethod != "" {
+			summaryParts = append(summaryParts,
+				lipgloss.NewStyle().Foreground(colorAccent).Render("⎇ "+pr.MergeMethod))
+		} else {
+			summaryParts = append(summaryParts,
+				lipgloss.NewStyle().Foreground(colorWaiting).Render("⎇ unset"))
+		}
+
+		if len(summaryParts) > 0 {
+			bodyLines = append(bodyLines,
+				"  "+strings.Join(summaryParts, "  "))
+			bodyLines = append(bodyLines, sep)
+		}
+	}
+
 	// Checks section.
 	if len(pr.Checks) > 0 {
 		passing, total := 0, len(pr.Checks)
