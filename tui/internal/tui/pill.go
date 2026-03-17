@@ -126,13 +126,22 @@ func renderPillWithName(s client.Session, displayName string, selected bool, glo
 			Render(fmt.Sprintf("%d", n))
 	}
 
-	style := lipgloss.NewStyle().
-		Padding(0, 1).
-		Foreground(sc).
-		Background(dimBg)
+	var style lipgloss.Style
+	if compact {
+		// Passive unselected pills: no background, just dim text — lighter visual weight.
+		style = lipgloss.NewStyle().
+			Padding(0, 0).
+			Foreground(colorDimFg)
+	} else {
+		style = lipgloss.NewStyle().
+			Padding(0, 1).
+			Foreground(sc).
+			Background(dimBg)
+	}
 
 	if selected {
-		style = style.
+		style = lipgloss.NewStyle().
+			Padding(0, 1).
 			Bold(true).
 			Foreground(lipgloss.ANSIColor(15)).
 			Background(sc).
