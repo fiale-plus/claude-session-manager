@@ -808,20 +808,45 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 			Render(fmt.Sprintf("  \u2717 %d failing", failingPRs))
 	}
 
-	runningStr := ""
-	running := 0
-	for _, s := range sessions {
-		if s.State == "running" {
-			running++
+	// State breakdown: count sessions per state.
+	stateBreakdownStr := ""
+	if len(sessions) > 0 {
+		running, waiting, idle, dead := 0, 0, 0, 0
+		for _, s := range sessions {
+			switch s.State {
+			case "running":
+				running++
+			case "waiting":
+				waiting++
+			case "idle":
+				idle++
+			case "dead":
+				dead++
+			}
+		}
+		var parts []string
+		if running > 0 {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorRunning).
+				Render(fmt.Sprintf("%d\u25b6", running)))
+		}
+		if waiting > 0 {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorWaiting).
+				Render(fmt.Sprintf("%d\u23f8", waiting)))
+		}
+		if idle > 0 {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorDimFg).
+				Render(fmt.Sprintf("%d\u2714", idle)))
+		}
+		if dead > 0 {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorDead).
+				Render(fmt.Sprintf("%d\u25cf", dead)))
+		}
+		if len(parts) > 0 {
+			stateBreakdownStr = "  " + strings.Join(parts, " ")
 		}
 	}
-	if running > 0 {
-		runningStr = lipgloss.NewStyle().
-			Foreground(colorRunning).
-			Render(fmt.Sprintf("  \u25b6 %d running", running))
-	}
 
-	left := logo + "  " + connStatus + "  " + sessionCount + prCount + runningStr + pendingStr + failingStr
+	left := logo + "  " + connStatus + "  " + sessionCount + prCount + stateBreakdownStr + pendingStr + failingStr
 
 	// Flash message (action feedback).
 	if flash != "" {

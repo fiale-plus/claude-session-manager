@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -46,6 +47,26 @@ func disambiguateNames(sessions []client.Session) map[string]string {
 	return result
 }
 
+// statePriority returns lower numbers for higher-priority (more urgent) states.
+func statePriority(s client.Session) int {
+	// Sessions with pending tools need attention first.
+	if len(s.PendingTools) > 0 {
+		return 0
+	}
+	switch s.State {
+	case "running":
+		return 1
+	case "waiting":
+		return 2
+	case "idle":
+		return 3
+	case "dead":
+		return 4
+	default:
+		return 5
+	}
+}
+
 // renderUnifiedStrip renders sessions + PRs in one strip with a separator.
 // It caps visible pills to fit within the given width, showing a "+N"
 // overflow indicator when pills are hidden.
@@ -55,6 +76,31 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		return styleStripBar.Width(width).Render(
 			emptyStyle.Render("  No active sessions or PRs"))
 	}
+
+	// Sort sessions by attention priority: pending > running > waiting > idle > dead.
+	// Track the selected session ID so we can remap selectedIdx after sorting.
+	var selectedSessionID string
+	if selectedIdx >= 0 && selectedIdx < len(sessions) {
+		selectedSessionID = sessions[selectedIdx].SessionID
+	}
+
+	// Work on a copy to avoid mutating the caller's slice.
+	sortedSessions := make([]client.Session, len(sessions))
+	copy(sortedSessions, sessions)
+	sort.SliceStable(sortedSessions, func(i, j int) bool {
+		return statePriority(sortedSessions[i]) < statePriority(sortedSessions[j])
+	})
+
+	// Remap selectedIdx to new position in sorted slice.
+	if selectedSessionID != "" {
+		for i, s := range sortedSessions {
+			if s.SessionID == selectedSessionID {
+				selectedIdx = i
+				break
+			}
+		}
+	}
+	sessions = sortedSessions
 
 	// Pre-compute disambiguated names for sessions.
 	nameMap := disambiguateNames(sessions)
