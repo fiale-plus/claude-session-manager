@@ -116,6 +116,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		rendered string
 		width    int
 		isSelected bool
+		state    string // session state (empty for PR/summary pills)
 	}
 
 	// Build all pill entries.
@@ -126,6 +127,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 			rendered:   p,
 			width:      lipgloss.Width(p),
 			isSelected: i == selectedIdx,
+			state:      s.State,
 		})
 	}
 

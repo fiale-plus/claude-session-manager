@@ -86,8 +86,25 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 	sep := lipgloss.NewStyle().Foreground(colorBorder).
 		Render(strings.Repeat("─", min(innerWidth, 60)))
 
-	// ── Merge readiness summary line ──
-	{
+	// ── Done state: merged or closed PRs ──
+	isDone := pr.State == "merged" || pr.State == "closed"
+	if isDone {
+		var doneMsg string
+		if pr.State == "merged" {
+			doneMsg = lipgloss.NewStyle().
+				Foreground(colorDimFg).
+				Render("  \u2714 Merged \u2014 no further action required")
+		} else {
+			doneMsg = lipgloss.NewStyle().
+				Foreground(colorDimFg).
+				Render("  \u25cf Closed \u2014 no further action required")
+		}
+		bodyLines = append(bodyLines, doneMsg)
+		bodyLines = append(bodyLines, sep)
+	}
+
+	// ── Merge readiness summary line (skip for done PRs) ──
+	if !isDone {
 		var summaryParts []string
 
 		// Approval status.
