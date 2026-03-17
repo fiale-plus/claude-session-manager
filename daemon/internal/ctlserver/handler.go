@@ -15,10 +15,11 @@ import (
 )
 
 type ctlRequest struct {
-	Action    string `json:"action"`
-	SessionID string `json:"session_id,omitempty"`
-	PRURL     string `json:"pr_url,omitempty"`     // for add_pr
-	PRKey     string `json:"pr_key,omitempty"`     // "owner/repo#N" for remove_pr
+	Action      string `json:"action"`
+	SessionID   string `json:"session_id,omitempty"`
+	PRURL       string `json:"pr_url,omitempty"`       // for add_pr
+	PRKey       string `json:"pr_key,omitempty"`       // "owner/repo#N" for remove_pr, cycle_pr_autopilot, set_merge_method
+	MergeMethod string `json:"merge_method,omitempty"` // for set_merge_method
 }
 
 type ctlResponse struct {
@@ -27,6 +28,7 @@ type ctlResponse struct {
 	PRs           []pr.TrackedPR  `json:"prs,omitempty"`
 	Event         string          `json:"event,omitempty"`
 	AutopilotMode string          `json:"autopilot_mode,omitempty"`
+	NewRepo       bool            `json:"new_repo,omitempty"` // true when add_pr is the first PR for this repo
 }
 
 type Handler struct {
@@ -70,6 +72,8 @@ func (h *Handler) Handle(conn net.Conn) {
 			h.handleRemovePR(conn, req.PRKey)
 		case "cycle_pr_autopilot":
 			h.handleCyclePRAutopilot(conn, req.PRKey)
+		case "set_merge_method":
+			h.handleSetMergeMethod(conn, req.PRKey, req.MergeMethod)
 		}
 	}
 }
@@ -155,18 +159,42 @@ func (h *Handler) handleAddPR(conn net.Conn, url string) {
 		writeJSON(conn, ctlResponse{OK: &f})
 		return
 	}
-	tracked, err := h.prPoll.AddFromURL(url)
+	tracked, newRepo, err := h.prPoll.AddFromURL(url)
 	if err != nil {
 		log.Printf("ctl: add_pr failed: %v", err)
 		f := false
 		writeJSON(conn, ctlResponse{OK: &f})
 		return
 	}
-	log.Printf("ctl: added PR %s/%s#%d", tracked.Owner, tracked.Repo, tracked.Number)
+	log.Printf("ctl: added PR %s/%s#%d (newRepo=%v)", tracked.Owner, tracked.Repo, tracked.Number, newRepo)
 	ok := true
-	writeJSON(conn, ctlResponse{OK: &ok})
+	writeJSON(conn, ctlResponse{OK: &ok, NewRepo: newRepo})
 	// Trigger immediate poll for the new PR.
 	go h.prPoll.Poll()
+}
+
+func (h *Handler) handleSetMergeMethod(conn net.Conn, key, method string) {
+	if h.prPoll == nil {
+		f := false
+		writeJSON(conn, ctlResponse{OK: &f})
+		return
+	}
+	parts := strings.SplitN(key, "#", 2)
+	if len(parts) != 2 {
+		f := false
+		writeJSON(conn, ctlResponse{OK: &f})
+		return
+	}
+	ownerRepo := strings.SplitN(parts[0], "/", 2)
+	if len(ownerRepo) != 2 {
+		f := false
+		writeJSON(conn, ctlResponse{OK: &f})
+		return
+	}
+	var number int
+	fmt.Sscanf(parts[1], "%d", &number)
+	ok := h.prPoll.SetMergeMethod(ownerRepo[0], ownerRepo[1], number, method)
+	writeJSON(conn, ctlResponse{OK: &ok})
 }
 
 func (h *Handler) handleCyclePRAutopilot(conn net.Conn, key string) {

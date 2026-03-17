@@ -17,14 +17,33 @@ const recentThresholdHours = 24
 // Scanner discovers Claude Code sessions via process table and JSONL files.
 type Scanner struct {
 	claudeProjectsDir string
+	resolvedClaudeBin string // real path of the claude binary (may be a versioned path)
 }
 
 // New creates a scanner.
 func New() *Scanner {
 	home, _ := os.UserHomeDir()
+	resolved := resolveClaudeBin()
 	return &Scanner{
 		claudeProjectsDir: filepath.Join(home, ".claude", "projects"),
+		resolvedClaudeBin: resolved,
 	}
+}
+
+// resolveClaudeBin resolves the claude binary to its real on-disk path,
+// following symlinks. Claude installs as a versioned binary (e.g.
+// ~/.local/share/claude/versions/2.1.77) symlinked from ~/.local/bin/claude,
+// so filepath.Base of the running process is "2.1.77", not "claude".
+func resolveClaudeBin() string {
+	p, err := exec.LookPath("claude")
+	if err != nil {
+		return ""
+	}
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return p
+	}
+	return real
 }
 
 // Discover finds all active and recently-dead CC sessions.
@@ -33,7 +52,7 @@ func (s *Scanner) Discover() []*model.Session {
 	seenJSONL := make(map[string]bool)
 
 	// Phase 1: Running processes.
-	procs := findClaudeProcesses()
+	procs := s.findClaudeProcesses()
 	cwdToPID := make(map[string]procInfo)
 	for _, p := range procs {
 		if existing, ok := cwdToPID[p.cwd]; !ok || p.pid > existing.pid {
@@ -109,7 +128,10 @@ type procInfo struct {
 
 // isClaudeCLI returns true if cmd looks like the actual `claude` CLI binary,
 // excluding Claude.app, csm-daemon, and claude-session-manager.
-func isClaudeCLI(cmd string) bool {
+// resolvedBin is the real on-disk path of the claude binary (from which claude +
+// EvalSymlinks), used to match versioned installs where the binary name is a
+// version string rather than "claude".
+func isClaudeCLI(cmd, resolvedBin string) bool {
 	// Exclude known non-CLI binaries first.
 	if strings.Contains(cmd, "Claude.app") {
 		return false
@@ -117,15 +139,16 @@ func isClaudeCLI(cmd string) bool {
 	if strings.Contains(cmd, "csm-daemon") || strings.Contains(cmd, "claude-session-manager") {
 		return false
 	}
-	// Match any path ending in "claude" as the binary name.
-	// filepath.Base handles all path formats:
-	//   "claude" → "claude"
-	//   "/usr/local/bin/claude" → "claude"
-	//   "/Users/x/.local/share/claude/versions/2.1.76/claude" → "claude"
-	return filepath.Base(cmd) == "claude"
+	// Standard install: binary named "claude".
+	if filepath.Base(cmd) == "claude" {
+		return true
+	}
+	// Versioned install: binary path matches the resolved real path
+	// e.g. ~/.local/share/claude/versions/2.1.77
+	return resolvedBin != "" && cmd == resolvedBin
 }
 
-func findClaudeProcesses() []procInfo {
+func (s *Scanner) findClaudeProcesses() []procInfo {
 	// Use ps to find Claude CLI processes with TTY info.
 	out, err := exec.Command("ps", "-eo", "pid,tty,args").Output()
 	if err != nil {
@@ -158,7 +181,7 @@ func findClaudeProcesses() []procInfo {
 			tty = ""
 		}
 		// The command starts at fields[2].
-		if !isClaudeCLI(fields[2]) {
+		if !isClaudeCLI(fields[2], s.resolvedClaudeBin) {
 			continue
 		}
 		// Extract session ID from --resume flag.

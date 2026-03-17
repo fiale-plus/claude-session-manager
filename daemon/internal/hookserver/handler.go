@@ -200,7 +200,7 @@ func (h *Handler) handlePostToolUse(req hookRequest) {
 		return
 	}
 	log.Printf("hook: PostToolUse detected PR URL: %s", url)
-	if _, err := h.prPoll.AddFromURL(url); err != nil {
+	if _, _, err := h.prPoll.AddFromURL(url); err != nil {
 		log.Printf("hook: auto-add PR failed: %v", err)
 	} else {
 		log.Printf("hook: auto-added PR %s", url)

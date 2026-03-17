@@ -98,14 +98,16 @@ type serverEvent struct {
 	Sessions []Session   `json:"sessions,omitempty"`
 	PRs      []TrackedPR `json:"prs,omitempty"`
 	OK       *bool       `json:"ok,omitempty"`
+	NewRepo  bool        `json:"new_repo,omitempty"`
 }
 
 // request is the shape of NDJSON messages sent to the daemon.
 type request struct {
-	Action    string `json:"action"`
-	SessionID string `json:"session_id,omitempty"`
-	PRURL     string `json:"pr_url,omitempty"`
-	PRKey     string `json:"pr_key,omitempty"`
+	Action      string `json:"action"`
+	SessionID   string `json:"session_id,omitempty"`
+	PRURL       string `json:"pr_url,omitempty"`
+	PRKey       string `json:"pr_key,omitempty"`
+	MergeMethod string `json:"merge_method,omitempty"`
 }
 
 // Client manages the connection to the CSM daemon.
@@ -167,11 +169,11 @@ func (c *Client) Subscribe() (<-chan StateUpdate, error) {
 }
 
 // sendCommand opens a separate short-lived connection for a command,
-// waits for the server response, and returns whether it succeeded.
-func (c *Client) sendCommand(req request) error {
+// waits for the server response, and returns the response and any error.
+func (c *Client) sendCommand(req request) (serverEvent, error) {
 	conn, err := net.Dial("unix", c.socketPath)
 	if err != nil {
-		return err
+		return serverEvent{}, err
 	}
 	defer conn.Close()
 
@@ -180,66 +182,83 @@ func (c *Client) sendCommand(req request) error {
 
 	data, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return serverEvent{}, err
 	}
 	data = append(data, '\n')
 	if _, err := conn.Write(data); err != nil {
-		return err
+		return serverEvent{}, err
 	}
 
 	// Read the server response to ensure it was processed.
-	scanner := bufio.NewScanner(conn)
-	if scanner.Scan() {
+	sc := bufio.NewScanner(conn)
+	if sc.Scan() {
 		var resp serverEvent
-		if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-			return err
+		if err := json.Unmarshal(sc.Bytes(), &resp); err != nil {
+			return serverEvent{}, err
 		}
 		if resp.OK != nil && !*resp.OK {
-			return fmt.Errorf("command rejected by daemon")
+			return resp, fmt.Errorf("command rejected by daemon")
 		}
+		return resp, nil
 	}
 
-	return nil
+	return serverEvent{}, nil
 }
 
 // ToggleAutopilot toggles autopilot for the given session.
 func (c *Client) ToggleAutopilot(sessionID string) error {
-	return c.sendCommand(request{Action: "toggle_autopilot", SessionID: sessionID})
+	_, err := c.sendCommand(request{Action: "toggle_autopilot", SessionID: sessionID})
+	return err
 }
 
 // Approve approves the pending tool for the given session.
 func (c *Client) Approve(sessionID string) error {
-	return c.sendCommand(request{Action: "approve", SessionID: sessionID})
+	_, err := c.sendCommand(request{Action: "approve", SessionID: sessionID})
+	return err
 }
 
 // Reject rejects the pending tool for the given session.
 func (c *Client) Reject(sessionID string) error {
-	return c.sendCommand(request{Action: "reject", SessionID: sessionID})
+	_, err := c.sendCommand(request{Action: "reject", SessionID: sessionID})
+	return err
 }
 
 // ApproveAll approves all non-destructive pending tools across all sessions.
 func (c *Client) ApproveAll() error {
-	return c.sendCommand(request{Action: "approve_all"})
+	_, err := c.sendCommand(request{Action: "approve_all"})
+	return err
 }
 
-// AddPR adds a PR to tracking by URL.
-func (c *Client) AddPR(url string) error {
-	return c.sendCommand(request{Action: "add_pr", PRURL: url})
+// AddPR adds a PR to tracking by URL. Returns newRepo=true if this is the
+// first PR seen from that repo (merge method needs to be configured).
+func (c *Client) AddPR(url string) (newRepo bool, err error) {
+	resp, err := c.sendCommand(request{Action: "add_pr", PRURL: url})
+	return resp.NewRepo, err
+}
+
+// SetMergeMethod sets the merge method for a tracked PR and persists the
+// preference for the repo. key is "owner/repo#number".
+func (c *Client) SetMergeMethod(key, method string) error {
+	_, err := c.sendCommand(request{Action: "set_merge_method", PRKey: key, MergeMethod: method})
+	return err
 }
 
 // RemovePR removes a PR from tracking by key (owner/repo#number).
 func (c *Client) RemovePR(key string) error {
-	return c.sendCommand(request{Action: "remove_pr", PRKey: key})
+	_, err := c.sendCommand(request{Action: "remove_pr", PRKey: key})
+	return err
 }
 
 // CyclePRAutopilot cycles PR autopilot: off → auto → yolo → off.
 func (c *Client) CyclePRAutopilot(key string) error {
-	return c.sendCommand(request{Action: "cycle_pr_autopilot", PRKey: key})
+	_, err := c.sendCommand(request{Action: "cycle_pr_autopilot", PRKey: key})
+	return err
 }
 
 // Focus focuses the Ghostty tab for the given session.
 func (c *Client) Focus(sessionID string) error {
-	return c.sendCommand(request{Action: "focus", SessionID: sessionID})
+	_, err := c.sendCommand(request{Action: "focus", SessionID: sessionID})
+	return err
 }
 
 // Close tears down the subscribe connection.

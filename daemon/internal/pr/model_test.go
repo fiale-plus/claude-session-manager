@@ -153,6 +153,7 @@ func TestShouldAutoMerge_AutoWithApprovalAndGreenChecks(t *testing.T) {
 	pr := TrackedPR{
 		AutopilotMode: PRAuto,
 		Mergeable:     "MERGEABLE",
+		MergeMethod:   "squash",
 		Checks:        []Check{{Conclusion: "SUCCESS", Status: "COMPLETED"}},
 		Reviews:       []Review{{State: "APPROVED"}},
 	}
@@ -188,6 +189,7 @@ func TestShouldAutoMerge_YoloWithGreenChecks(t *testing.T) {
 	pr := TrackedPR{
 		AutopilotMode: PRYolo,
 		Mergeable:     "MERGEABLE",
+		MergeMethod:   "squash",
 		Checks:        []Check{{Conclusion: "SUCCESS", Status: "COMPLETED"}},
 		// No reviews — YOLO doesn't need them.
 	}
@@ -289,6 +291,7 @@ func TestShouldAutoMerge_MixedChecksAllGreenAndInProgress(t *testing.T) {
 	pr := TrackedPR{
 		AutopilotMode: PRAuto,
 		Mergeable:     "MERGEABLE",
+		MergeMethod:   "squash",
 		Checks: []Check{
 			{Name: "ci", Status: "COMPLETED", Conclusion: "SUCCESS"},
 			{Name: "deploy", Status: "IN_PROGRESS", Conclusion: ""},

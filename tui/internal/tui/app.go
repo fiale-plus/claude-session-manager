@@ -34,6 +34,13 @@ type actionResultMsg struct {
 	err    error
 }
 
+// addPRResultMsg carries the result of an add_pr command.
+type addPRResultMsg struct {
+	prKey   string // "owner/repo#N"
+	newRepo bool   // true if this is the first PR from this repo
+	err     error
+}
+
 // clearFlashMsg clears the status flash after a delay.
 type clearFlashMsg struct{}
 
@@ -58,8 +65,10 @@ type Model struct {
 	glowDir      int // 1 or -1 for ping-pong
 	inputMode          bool              // text input active (for + add PR)
 	inputBuffer        string            // text being typed
-	mergePickerVisible bool              // merge strategy picker showing
-	mergePickerPR      *client.TrackedPR // PR being merged
+	mergePickerVisible   bool              // merge strategy picker showing
+	mergePickerPR        *client.TrackedPR // PR being merged (may be nil for config-only mode)
+	mergePickerPRKey     string            // "owner/repo#N" — used for SetMergeMethod
+	mergePickerForConfig bool              // true when picker is for configuring method (new repo), not immediate merge
 	scrollOffset int // scroll position in zoom body
 }
 
@@ -213,6 +222,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, clearFlashAfter(2 * time.Second)
 
+	case addPRResultMsg:
+		if msg.err != nil {
+			m.flash = fmt.Sprintf("add PR failed: %v", msg.err)
+			m.flashStyle = lipgloss.NewStyle().Foreground(colorDestructive).Bold(true)
+			return m, clearFlashAfter(2 * time.Second)
+		}
+		// New repo — auto-show merge picker so the user configures the method.
+		if msg.newRepo && msg.prKey != "" {
+			// Try to find the PR in the current list; it may already be polled.
+			var found *client.TrackedPR
+			for i := range m.prs {
+				if prKey(&m.prs[i]) == msg.prKey {
+					found = &m.prs[i]
+					break
+				}
+			}
+			m.mergePickerPR = found
+			m.mergePickerPRKey = msg.prKey
+			m.mergePickerForConfig = true
+			m.mergePickerVisible = true
+			return m, nil
+		}
+		m.flash = "added PR"
+		m.flashStyle = lipgloss.NewStyle().Foreground(colorRunning)
+		return m, clearFlashAfter(2 * time.Second)
+
 	case clearFlashMsg:
 		m.flash = ""
 		return m, nil
@@ -231,11 +266,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inputBuffer = ""
 			if url != "" {
 				return m, func() tea.Msg {
-					err := m.client.AddPR(url)
+					newRepo, err := m.client.AddPR(url)
 					if err != nil {
-						return actionResultMsg{action: "add PR", err: err}
+						return addPRResultMsg{err: err}
 					}
-					return actionResultMsg{action: "added PR"}
+					// Derive key from URL for newRepo prompt (daemon will confirm via poll).
+					key := prKeyFromURL(url)
+					return addPRResultMsg{prKey: key, newRepo: newRepo}
 				}
 			}
 			return m, nil
@@ -470,21 +507,30 @@ end tell`, tabIdx, tabIdx)
 		// Merge selected PR — show merge strategy picker.
 		if pr := m.selectedPR(); pr != nil {
 			m.mergePickerPR = pr
+			m.mergePickerPRKey = prKey(pr)
+			m.mergePickerForConfig = false
 			m.mergePickerVisible = true
 			return m, nil
 		}
 
 	case "1":
 		// Merge picker: squash automerge.
-		if m.mergePickerVisible && m.mergePickerPR != nil {
+		if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
 			pr := m.mergePickerPR
+			key := m.mergePickerPRKey
+			forConfig := m.mergePickerForConfig
 			m.mergePickerVisible = false
 			m.mergePickerPR = nil
-			owner, repo, number := pr.Owner, pr.Repo, pr.Number
+			m.mergePickerPRKey = ""
+			m.mergePickerForConfig = false
 			return m, func() tea.Msg {
+				_ = m.client.SetMergeMethod(key, "squash")
+				if forConfig {
+					return actionResultMsg{action: "merge method set: squash"}
+				}
 				err := exec.Command("gh", "pr", "merge",
-					fmt.Sprintf("%d", number),
-					"--repo", fmt.Sprintf("%s/%s", owner, repo),
+					fmt.Sprintf("%d", pr.Number),
+					"--repo", fmt.Sprintf("%s/%s", pr.Owner, pr.Repo),
 					"--squash", "--auto").Run()
 				if err != nil {
 					return actionResultMsg{action: "squash merge", err: err}
@@ -495,15 +541,22 @@ end tell`, tabIdx, tabIdx)
 
 	case "2":
 		// Merge picker: rebase automerge.
-		if m.mergePickerVisible && m.mergePickerPR != nil {
+		if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
 			pr := m.mergePickerPR
+			key := m.mergePickerPRKey
+			forConfig := m.mergePickerForConfig
 			m.mergePickerVisible = false
 			m.mergePickerPR = nil
-			owner, repo, number := pr.Owner, pr.Repo, pr.Number
+			m.mergePickerPRKey = ""
+			m.mergePickerForConfig = false
 			return m, func() tea.Msg {
+				_ = m.client.SetMergeMethod(key, "rebase")
+				if forConfig {
+					return actionResultMsg{action: "merge method set: rebase"}
+				}
 				err := exec.Command("gh", "pr", "merge",
-					fmt.Sprintf("%d", number),
-					"--repo", fmt.Sprintf("%s/%s", owner, repo),
+					fmt.Sprintf("%d", pr.Number),
+					"--repo", fmt.Sprintf("%s/%s", pr.Owner, pr.Repo),
 					"--rebase", "--auto").Run()
 				if err != nil {
 					return actionResultMsg{action: "rebase merge", err: err}
@@ -514,15 +567,22 @@ end tell`, tabIdx, tabIdx)
 
 	case "3":
 		// Merge picker: Aviator merge queue.
-		if m.mergePickerVisible && m.mergePickerPR != nil {
+		if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
 			pr := m.mergePickerPR
+			key := m.mergePickerPRKey
+			forConfig := m.mergePickerForConfig
 			m.mergePickerVisible = false
 			m.mergePickerPR = nil
-			owner, repo, number := pr.Owner, pr.Repo, pr.Number
+			m.mergePickerPRKey = ""
+			m.mergePickerForConfig = false
 			return m, func() tea.Msg {
+				_ = m.client.SetMergeMethod(key, "aviator")
+				if forConfig {
+					return actionResultMsg{action: "merge method set: aviator"}
+				}
 				err := exec.Command("gh", "pr", "comment",
-					fmt.Sprintf("%d", number),
-					"--repo", fmt.Sprintf("%s/%s", owner, repo),
+					fmt.Sprintf("%d", pr.Number),
+					"--repo", fmt.Sprintf("%s/%s", pr.Owner, pr.Repo),
 					"--body", "/aviator merge").Run()
 				if err != nil {
 					return actionResultMsg{action: "aviator merge", err: err}
@@ -533,15 +593,22 @@ end tell`, tabIdx, tabIdx)
 
 	case "4":
 		// Merge picker: merge commit automerge.
-		if m.mergePickerVisible && m.mergePickerPR != nil {
+		if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
 			pr := m.mergePickerPR
+			key := m.mergePickerPRKey
+			forConfig := m.mergePickerForConfig
 			m.mergePickerVisible = false
 			m.mergePickerPR = nil
-			owner, repo, number := pr.Owner, pr.Repo, pr.Number
+			m.mergePickerPRKey = ""
+			m.mergePickerForConfig = false
 			return m, func() tea.Msg {
+				_ = m.client.SetMergeMethod(key, "merge")
+				if forConfig {
+					return actionResultMsg{action: "merge method set: merge commit"}
+				}
 				err := exec.Command("gh", "pr", "merge",
-					fmt.Sprintf("%d", number),
-					"--repo", fmt.Sprintf("%s/%s", owner, repo),
+					fmt.Sprintf("%d", pr.Number),
+					"--repo", fmt.Sprintf("%s/%s", pr.Owner, pr.Repo),
 					"--merge", "--auto").Run()
 				if err != nil {
 					return actionResultMsg{action: "merge commit", err: err}
@@ -554,6 +621,8 @@ end tell`, tabIdx, tabIdx)
 		if m.mergePickerVisible {
 			m.mergePickerVisible = false
 			m.mergePickerPR = nil
+			m.mergePickerPRKey = ""
+			m.mergePickerForConfig = false
 		} else if m.inputMode {
 			m.inputMode = false
 			m.inputBuffer = ""
@@ -603,6 +672,22 @@ func (m Model) selectedPR() *client.TrackedPR {
 		return &pr
 	}
 	return nil
+}
+
+// prKey returns the canonical "owner/repo#N" key for a PR.
+func prKey(pr *client.TrackedPR) string {
+	return fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+}
+
+// prKeyFromURL extracts "owner/repo#N" from a GitHub PR URL.
+// Returns an empty string on parse failure.
+func prKeyFromURL(url string) string {
+	url = strings.TrimSuffix(strings.TrimSpace(url), "/")
+	parts := strings.Split(url, "/")
+	if len(parts) < 5 || parts[len(parts)-2] != "pull" {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s#%s", parts[len(parts)-4], parts[len(parts)-3], parts[len(parts)-1])
 }
 
 // isSessionSelected returns true if a session (not PR) is selected.
@@ -657,10 +742,16 @@ func (m Model) View() string {
 	bottomHeight := stripHeight + hintsHeight
 
 	// Merge strategy picker overlay.
-	if m.mergePickerVisible && m.mergePickerPR != nil {
-		pr := m.mergePickerPR
+	if m.mergePickerVisible && (m.mergePickerPR != nil || m.mergePickerForConfig) {
+		var header string
+		if m.mergePickerPR != nil {
+			pr := m.mergePickerPR
+			header = fmt.Sprintf("  Merge #%d %s\n", pr.Number, pr.Title)
+		} else {
+			header = fmt.Sprintf("  Set merge method for %s\n", m.mergePickerPRKey)
+		}
 		picker := lipgloss.NewStyle().Padding(1, 2).Render(
-			styleZoomHeader.Render(fmt.Sprintf("  Merge #%d %s\n", pr.Number, pr.Title)) + "\n" +
+			styleZoomHeader.Render(header) + "\n" +
 				lipgloss.NewStyle().Foreground(colorFg).Render(
 					"  [1] Squash automerge\n"+
 						"  [2] Rebase automerge\n"+
