@@ -82,8 +82,8 @@ func TestRenderHints_MergedNavigate(t *testing.T) {
 func TestRenderHints_PRSelected(t *testing.T) {
 	out := renderHints(false, false, true, 200)
 	// Should show PR-specific hints.
-	if !strings.Contains(out, "merge") {
-		t.Error("PR selected: hints should contain 'merge'")
+	if !strings.Contains(out, "method") {
+		t.Error("PR selected: hints should contain 'method'")
 	}
 	if !strings.Contains(out, "add PR") {
 		t.Error("PR selected: hints should contain 'add PR'")

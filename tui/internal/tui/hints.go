@@ -23,8 +23,7 @@ func renderHints(queueVisible bool, hasPending bool, isPRSelected bool, width in
 		// PR-specific hints.
 		keys = append(keys, hint{"Enter", "open PR"})
 		keys = append(keys, hint{"a", "autopilot"})
-		keys = append(keys, hint{"m", "merge"})
-		keys = append(keys, hint{"M", "set method"})
+		keys = append(keys, hint{"m", "method"})
 		keys = append(keys, hint{"+", "add PR"})
 		keys = append(keys, hint{"-", "remove"})
 	} else {
@@ -110,7 +109,7 @@ func renderHelp(width, height, scrollOffset int) string {
 		{"a", "Cycle PR autopilot: OFF → AUTO → YOLO"},
 		{"+", "Add PR to tracking (paste URL)"},
 		{"-", "Remove selected PR"},
-		{"m", "Merge — pick strategy"},
+		{"m", "Set merge method (daemon handles actual merge)"},
 		{"o", "Open PR in browser"},
 		{"", ""},
 		{"h", "Toggle this help screen"},
