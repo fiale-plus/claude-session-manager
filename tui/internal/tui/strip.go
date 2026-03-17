@@ -464,8 +464,8 @@ func renderPRPill(p client.TrackedPR, selected bool) string {
 		// Important: show title for context.
 		label = fmt.Sprintf("%s #%d %s", icon, p.Number, truncateWordBoundary(p.Title, 15))
 	} else {
-		// Non-critical unselected: compact — just icon + number.
-		label = fmt.Sprintf("%s #%d", icon, p.Number)
+		// Non-critical unselected: compact — icon + repo + number.
+		label = fmt.Sprintf("%s %s#%d", icon, p.Repo, p.Number)
 	}
 
 	sc := prStateColor(p.State)

@@ -57,18 +57,11 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 	infoParts = append(infoParts, pr.HeadBranch+" → "+pr.BaseBranch)
 	infoParts = append(infoParts, fmt.Sprintf("+%d -%d", pr.Additions, pr.Deletions))
 	infoParts = append(infoParts, fmt.Sprintf("%d commits", pr.CommitCount))
-	if pr.Mergeable == "MERGEABLE" {
-		infoParts = append(infoParts, "mergeable")
-	} else if pr.Mergeable == "CONFLICTING" {
+	if pr.Mergeable == "CONFLICTING" {
 		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorDestructive).Render("conflicts"))
 	}
 	if pr.AutopilotMode == "auto" || pr.AutopilotMode == "yolo" {
 		infoParts = append(infoParts, "automerge")
-	}
-	if pr.MergeMethod != "" {
-		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorAccent).Render("⎇ "+pr.MergeMethod))
-	} else {
-		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorWaiting).Render("⎇ unset"))
 	}
 	if pr.AgentCostUSD > 0 {
 		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorDimFg).
