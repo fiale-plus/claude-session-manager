@@ -41,6 +41,16 @@ func renderQueue(sessions []client.Session, width, height int) string {
 			name = s.SessionID[:min(8, len(s.SessionID))]
 		}
 
+		// Separate tools into destructive and safe groups.
+		var destructiveTools, safeTools []client.PendingTool
+		for _, pt := range s.PendingTools {
+			if pt.Safety == "destructive" {
+				destructiveTools = append(destructiveTools, pt)
+			} else {
+				safeTools = append(safeTools, pt)
+			}
+		}
+
 		sessionID := s.SessionID[:min(8, len(s.SessionID))]
 		sessionHeader := styleZoomHeader.Render(name) +
 			"  " + lipgloss.NewStyle().
@@ -49,12 +59,10 @@ func renderQueue(sessions []client.Session, width, height int) string {
 
 		lines = append(lines, sessionHeader)
 
-		for _, pt := range s.PendingTools {
+		renderTool := func(pt client.PendingTool) string {
 			marker := safetyMarker(pt.Safety)
 			toolStyle := lipgloss.NewStyle().Foreground(colorFg).Bold(true)
 			toolLine := fmt.Sprintf("  %s %s", marker, toolStyle.Render(pt.ToolName))
-
-			// Show key details of tool input.
 			detail := toolInputSummary(pt)
 			if detail != "" {
 				detailWidth := innerWidth - 14
@@ -67,9 +75,31 @@ func renderQueue(sessions []client.Session, width, height int) string {
 					Italic(true).
 					Render(detail)
 			}
-
-			lines = append(lines, toolLine)
+			return toolLine
 		}
+
+		// Destructive tools first with a section label.
+		if len(destructiveTools) > 0 {
+			lines = append(lines,
+				lipgloss.NewStyle().Foreground(colorDestructive).Bold(true).
+					Render("  \u26a0 Destructive:"))
+			for _, pt := range destructiveTools {
+				lines = append(lines, renderTool(pt))
+			}
+		}
+
+		// Safe tools with a section label (only if both groups non-empty).
+		if len(safeTools) > 0 {
+			if len(destructiveTools) > 0 {
+				lines = append(lines,
+					lipgloss.NewStyle().Foreground(colorRunning).Bold(true).
+						Render("  \u2713 Safe:"))
+			}
+			for _, pt := range safeTools {
+				lines = append(lines, renderTool(pt))
+			}
+		}
+
 		lines = append(lines, "")
 	}
 
