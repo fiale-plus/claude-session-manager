@@ -90,27 +90,37 @@ func isPassiveState(state string) bool {
 	return state == "idle" || state == "dead"
 }
 
+// pillNameMaxLen returns the max name length based on state and selection.
+// Selected pills show full 20-char names.
+// Active unselected (running/waiting): 8 chars — visible but compact.
+// Passive unselected (idle/dead): 4 chars — minimal footprint.
+func pillNameMaxLen(state string, selected bool) int {
+	if selected {
+		return 20
+	}
+	if isPassiveState(state) {
+		return 4
+	}
+	return 8 // running, waiting, or other active states
+}
+
 // renderPillWithName renders a pill using a pre-computed display name
 // (which may include a disambiguator).
-// Passive (idle/dead) unselected pills are rendered in compact form: icon + 4 chars of name.
+// Name length is tiered by state and selection for visual hierarchy.
 func renderPillWithName(s client.Session, displayName string, selected bool, glowPos int) string {
 	sc := stateColor(s.State)
 	dimBg := stateColorDim(s.State)
 	icon := stateIcon(s.State)
 
-	// Compact mode for passive unselected pills — saves ~16 chars each.
 	compact := isPassiveState(s.State) && !selected
+	maxLen := pillNameMaxLen(s.State, selected)
 
 	var name string
-	if compact {
-		runes := []rune(displayName)
-		if len(runes) > 4 {
-			name = string(runes[:4])
-		} else {
-			name = displayName
-		}
+	runes := []rune(displayName)
+	if len(runes) > maxLen {
+		name = string(runes[:maxLen])
 	} else {
-		name = truncateMiddle(displayName, 20)
+		name = displayName
 	}
 
 	label := icon + " " + name

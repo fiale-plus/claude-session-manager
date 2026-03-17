@@ -816,6 +816,23 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 			Padding(0, 1).
 			Render(fmt.Sprintf("\u26a1 %d PENDING", pending))
 		pendingStr = "  " + pendingBadge
+
+		// Find oldest pending session (by LastActivity time).
+		var oldestTime *time.Time
+		for _, s := range sessions {
+			if len(s.PendingTools) > 0 && s.LastActivity != nil {
+				if oldestTime == nil || s.LastActivity.Before(*oldestTime) {
+					t := *s.LastActivity
+					oldestTime = &t
+				}
+			}
+		}
+		if oldestTime != nil {
+			age := time.Since(*oldestTime)
+			pendingStr += lipgloss.NewStyle().
+				Foreground(colorOrange).
+				Render(fmt.Sprintf(" %s ago", formatAge(age)))
+		}
 	}
 
 	failingStr := ""
