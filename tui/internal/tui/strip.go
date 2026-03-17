@@ -473,6 +473,18 @@ func prPillIcon(state string) string {
 	}
 }
 
+// prStateDimBg returns a muted background for critical unselected PR pills.
+func prStateDimBg(state string) lipgloss.TerminalColor {
+	switch state {
+	case "checks_failing":
+		return lipgloss.ANSIColor(1) // dark red — failing is urgent
+	case "approved":
+		return lipgloss.ANSIColor(2) // dark green — approved/ready to merge
+	default:
+		return lipgloss.ANSIColor(0) // black (no tint)
+	}
+}
+
 // interleave inserts a separator between each element.
 func interleave(items []string, sep string) []string {
 	if len(items) == 0 {
