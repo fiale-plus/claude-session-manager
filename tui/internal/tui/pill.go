@@ -85,14 +85,33 @@ func renderPill(s client.Session, selected bool, glowPos int) string {
 	return renderPillWithName(s, pillName(s), selected, glowPos)
 }
 
+// isPassiveState returns true if the session state is idle or dead (not actively working).
+func isPassiveState(state string) bool {
+	return state == "idle" || state == "dead"
+}
+
 // renderPillWithName renders a pill using a pre-computed display name
 // (which may include a disambiguator).
+// Passive (idle/dead) unselected pills are rendered in compact form: icon + 4 chars of name.
 func renderPillWithName(s client.Session, displayName string, selected bool, glowPos int) string {
 	sc := stateColor(s.State)
 	dimBg := stateColorDim(s.State)
 	icon := stateIcon(s.State)
 
-	name := truncateMiddle(displayName, 20)
+	// Compact mode for passive unselected pills — saves ~16 chars each.
+	compact := isPassiveState(s.State) && !selected
+
+	var name string
+	if compact {
+		runes := []rune(displayName)
+		if len(runes) > 4 {
+			name = string(runes[:4])
+		} else {
+			name = displayName
+		}
+	} else {
+		name = truncateMiddle(displayName, 20)
+	}
 
 	label := icon + " " + name
 
