@@ -233,14 +233,33 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 }
 
 // renderFleetMap renders a compact 1-line overview of all sessions as state
-// glyphs, e.g. "Sessions: 3▶ 2⏸ 1✔ ●" to give context from any zoom view.
+// glyphs, e.g. "Session 3/10: [▶]▶▶⏸⏸✔●" to give context from any zoom view.
 // Returns empty string when there are fewer than 3 sessions.
 func renderFleetMap(sessions []client.Session, currentSID string, width int) string {
 	if len(sessions) < 3 {
 		return ""
 	}
 
-	label := lipgloss.NewStyle().Foreground(colorDimFg).Render("  Sessions: ")
+	// Find current session position.
+	currentPos := 0
+	for i, s := range sessions {
+		if s.SessionID == currentSID {
+			currentPos = i + 1
+			break
+		}
+	}
+
+	posStr := ""
+	if currentPos > 0 {
+		posStr = lipgloss.NewStyle().Foreground(colorFg).Bold(true).
+			Render(fmt.Sprintf("%d", currentPos)) +
+			lipgloss.NewStyle().Foreground(colorDimFg).
+			Render(fmt.Sprintf("/%d", len(sessions)))
+	}
+
+	label := lipgloss.NewStyle().Foreground(colorDimFg).Render("  Session ") +
+		posStr +
+		lipgloss.NewStyle().Foreground(colorDimFg).Render(": ")
 
 	var glyphs []string
 	for _, s := range sessions {
