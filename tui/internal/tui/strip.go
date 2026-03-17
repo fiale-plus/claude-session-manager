@@ -371,16 +371,34 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 	return styleStripBar.Width(width).Render(row)
 }
 
+// prStateNeedsTitle returns true for PR states where the title adds context.
+// Critical states (failing checks, needs review) show the title so the user
+// can act. Non-critical states (running checks, passing) just show number.
+func prStateNeedsTitle(state string) bool {
+	switch state {
+	case "checks_failing", "approved":
+		return true
+	default:
+		return false
+	}
+}
+
 // renderPRPill renders a single PR pill in the strip.
 func renderPRPill(p client.TrackedPR, selected bool) string {
 	icon := prPillIcon(p.State)
 
-	// For merged PRs, just show "#N" since the title no longer matters.
+	// Show title only for: selected pills, critical states (failing/approved),
+	// or when merged/closed (which show compact "#N" anyway — handled below).
 	var label string
 	if p.State == "merged" || p.State == "closed" {
+		// Terminal state: just number, no title needed.
 		label = fmt.Sprintf("%s #%d", icon, p.Number)
-	} else {
+	} else if selected || prStateNeedsTitle(p.State) {
+		// Important: show title for context.
 		label = fmt.Sprintf("%s #%d %s", icon, p.Number, truncateWordBoundary(p.Title, 15))
+	} else {
+		// Non-critical unselected: compact — just icon + number.
+		label = fmt.Sprintf("%s #%d", icon, p.Number)
 	}
 
 	sc := prStateColor(p.State)
