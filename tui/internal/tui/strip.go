@@ -354,10 +354,37 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		}
 	}
 
+	// overflowLabel builds an overflow indicator like "+3" or "+3(▶2⏸1)"
+	// for hidden pills. If any hidden pills are active sessions (running/waiting),
+	// the state breakdown is shown to prevent "+N confusion".
+	overflowLabel := func(hiddenPills []pillEntry) string {
+		n := len(hiddenPills)
+		if n == 0 {
+			return ""
+		}
+		stateCounts := map[string]int{}
+		for _, p := range hiddenPills {
+			if p.state != "" {
+				stateCounts[p.state]++
+			}
+		}
+		var stateParts []string
+		if c := stateCounts["running"]; c > 0 {
+			stateParts = append(stateParts, fmt.Sprintf("\u25b6%d", c))
+		}
+		if c := stateCounts["waiting"]; c > 0 {
+			stateParts = append(stateParts, fmt.Sprintf("\u23f8%d", c))
+		}
+		if len(stateParts) > 0 {
+			return fmt.Sprintf("+%d(%s)", n, strings.Join(stateParts, ""))
+		}
+		return fmt.Sprintf("+%d", n)
+	}
+
 	// Build visible pills with overflow indicators.
 	var pills []string
 	if visStart > 0 {
-		pills = append(pills, overflowStyle.Render(fmt.Sprintf("+%d", visStart)))
+		pills = append(pills, overflowStyle.Render(overflowLabel(allPills[:visStart])))
 	}
 	for i := visStart; i <= visEnd; i++ {
 		if hasSep && i == sepBoundary && visStart <= sepBoundary-1 {
@@ -366,7 +393,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		pills = append(pills, allPills[i].rendered)
 	}
 	if visEnd < totalPills-1 {
-		pills = append(pills, overflowStyle.Render(fmt.Sprintf("+%d", totalPills-1-visEnd)))
+		pills = append(pills, overflowStyle.Render(overflowLabel(allPills[visEnd+1:])))
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Center, interleave(pills, " ")...)
