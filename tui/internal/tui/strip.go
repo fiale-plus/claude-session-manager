@@ -129,8 +129,54 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		})
 	}
 
+	// Filter terminal PRs when active ones exist: hide merged/closed PRs from
+	// the visible strip and show a compact count indicator instead.
+	visiblePRs := prs
+	doneCount := 0
+	hasActivePR := false
+	for _, p := range prs {
+		if p.State != "merged" && p.State != "closed" {
+			hasActivePR = true
+			break
+		}
+	}
+	if hasActivePR {
+		var filtered []client.TrackedPR
+		for _, p := range prs {
+			if p.State == "merged" || p.State == "closed" {
+				doneCount++
+				// If this PR is selected, include it anyway so selection stays valid.
+				prIdx := len(sessions) + len(filtered)
+				_ = prIdx
+			} else {
+				filtered = append(filtered, p)
+			}
+		}
+		// Remap selectedIdx if we filtered out PRs before the selected one.
+		if selectedIdx >= len(sessions) {
+			origPRIdx := selectedIdx - len(sessions)
+			if origPRIdx < len(prs) {
+				selectedPR := prs[origPRIdx]
+				if selectedPR.State == "merged" || selectedPR.State == "closed" {
+					// Selected PR was filtered; keep it visible.
+					filtered = append(filtered, selectedPR)
+					selectedIdx = len(sessions) + len(filtered) - 1
+				} else {
+					// Remap to new position in filtered slice.
+					for newI, p := range filtered {
+						if p.Number == selectedPR.Number && p.Owner == selectedPR.Owner {
+							selectedIdx = len(sessions) + newI
+							break
+						}
+					}
+				}
+			}
+		}
+		visiblePRs = filtered
+	}
+
 	// Separator between sessions and PRs.
-	hasSep := len(sessions) > 0 && len(prs) > 0
+	hasSep := len(sessions) > 0 && len(visiblePRs) > 0
 	sepStr := ""
 	sepWidth := 0
 	if hasSep {
@@ -138,13 +184,29 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		sepWidth = lipgloss.Width(sepStr) + 2 // " │ " with surrounding spaces
 	}
 
-	for i, p := range prs {
+	for i, p := range visiblePRs {
 		prIdx := len(sessions) + i
 		pill := renderPRPill(p, prIdx == selectedIdx)
 		allPills = append(allPills, pillEntry{
 			rendered:   pill,
 			width:      lipgloss.Width(pill),
 			isSelected: prIdx == selectedIdx,
+		})
+	}
+
+	// Append a compact "done" indicator if any PRs were filtered.
+	if doneCount > 0 {
+		doneStr := lipgloss.NewStyle().Foreground(colorDimFg).Render(fmt.Sprintf("(+%d done)", doneCount))
+		// Add separator if no visible PRs were rendered (only done PRs).
+		if !hasSep && len(sessions) > 0 {
+			sepStr = lipgloss.NewStyle().Foreground(colorBorder).Render("│")
+			sepWidth = lipgloss.Width(sepStr) + 2
+			hasSep = true
+		}
+		allPills = append(allPills, pillEntry{
+			rendered:   doneStr,
+			width:      lipgloss.Width(doneStr),
+			isSelected: false,
 		})
 	}
 
