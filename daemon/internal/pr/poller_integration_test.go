@@ -689,6 +689,7 @@ func TestPollOne_HammerOnChecksFailing(t *testing.T) {
 	tracked.Hammer = true
 	tracked.AutopilotMode = PRAuto
 	tracked.MaxHammer = 3
+	tracked.ReviewState = "clean" // skip review — this test is about hammering
 
 	p.pollOne("test", "repo", 1)
 
@@ -707,6 +708,9 @@ func TestPollOne_HammerOnChecksFailing(t *testing.T) {
 
 	if pr.HammerCount != 1 {
 		t.Errorf("hammerCount = %d, want 1", pr.HammerCount)
+	}
+	if pr.AgentRunning != "fix_ci" {
+		t.Errorf("AgentRunning = %q, want fix_ci", pr.AgentRunning)
 	}
 }
 
