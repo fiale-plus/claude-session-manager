@@ -436,8 +436,16 @@ func renderPRPill(p client.TrackedPR, selected bool) string {
 		Padding(0, 1).
 		Foreground(sc)
 
+	// Critical unselected PRs (failing checks, approved awaiting merge) get
+	// bold + dim background tint to signal urgency without the full border.
+	if !selected && prStateNeedsTitle(p.State) {
+		dimBg := prStateDimBg(p.State)
+		style = style.Bold(true).Background(dimBg)
+	}
+
 	if selected {
-		style = style.
+		style = lipgloss.NewStyle().
+			Padding(0, 1).
 			Bold(true).
 			Foreground(lipgloss.ANSIColor(15)).
 			Background(sc).

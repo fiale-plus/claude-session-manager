@@ -799,10 +799,46 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 		Render(pluralize(len(sessions), "session", "sessions"))
 
 	prCount := ""
+	prBreakdownStr := ""
 	if len(prs) > 0 {
 		prCount = "  " + lipgloss.NewStyle().
 			Foreground(colorDimFg).
 			Render(pluralize(len(prs), "PR", "PRs"))
+
+		// PR state breakdown: passing / failing / running counts.
+		passing, failing, running, merged := 0, 0, 0, 0
+		for _, p := range prs {
+			switch p.State {
+			case "checks_passing", "approved":
+				passing++
+			case "checks_failing":
+				failing++
+			case "checks_running":
+				running++
+			case "merged":
+				merged++
+			}
+		}
+		var prParts []string
+		if passing > 0 {
+			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorRunning).
+				Render(fmt.Sprintf("%d\u2713", passing)))
+		}
+		if failing > 0 {
+			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorDestructive).
+				Render(fmt.Sprintf("%d\u2717", failing)))
+		}
+		if running > 0 {
+			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorWaiting).
+				Render(fmt.Sprintf("%d\u23f3", running)))
+		}
+		if merged > 0 {
+			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorDimFg).
+				Render(fmt.Sprintf("%d\u2714", merged)))
+		}
+		if len(prParts) > 0 {
+			prBreakdownStr = " " + strings.Join(prParts, " ")
+		}
 	}
 
 	pendingStr := ""
@@ -885,7 +921,7 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 		}
 	}
 
-	left := logo + "  " + connStatus + "  " + sessionCount + prCount + stateBreakdownStr + pendingStr + failingStr
+	left := logo + "  " + connStatus + "  " + sessionCount + prCount + prBreakdownStr + stateBreakdownStr + pendingStr + failingStr
 
 	// Flash message (action feedback).
 	if flash != "" {
