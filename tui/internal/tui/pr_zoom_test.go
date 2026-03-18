@@ -469,6 +469,49 @@ func TestRenderPRZoom_CheckWithDuration(t *testing.T) {
 
 // === Empty PR (minimal data) ===
 
+func TestRenderPRZoom_NoDuplicateMergeableInHeader(t *testing.T) {
+	pr := testPR()
+	pr.Mergeable = "MERGEABLE"
+	pr.MergeMethod = "squash"
+	out := renderPRZoom(pr, 120, 25, 0)
+	lines := strings.Split(out, "\n")
+	// Line 2 (index 1) is the info line with branch, +/-, commits.
+	// It should NOT contain "mergeable" or "⎇" — those are in the readiness summary only.
+	if len(lines) < 2 {
+		t.Fatal("expected at least 2 lines")
+	}
+	headerLine := lines[1]
+	if strings.Contains(headerLine, "mergeable") {
+		t.Error("header line should not contain 'mergeable' — it's in readiness summary")
+	}
+	if strings.Contains(headerLine, "⎇") {
+		t.Error("header line should not contain merge method — it's in readiness summary")
+	}
+	// But the readiness summary (in body) should have them.
+	body := strings.Join(lines[2:], "\n")
+	if !strings.Contains(body, "mergeable") {
+		t.Error("readiness summary should contain 'mergeable'")
+	}
+	if !strings.Contains(body, "squash") {
+		t.Error("readiness summary should contain merge method")
+	}
+}
+
+func TestRenderPRZoom_ConflictsStillInHeader(t *testing.T) {
+	pr := testPR()
+	pr.Mergeable = "CONFLICTING"
+	out := renderPRZoom(pr, 120, 25, 0)
+	lines := strings.Split(out, "\n")
+	if len(lines) < 2 {
+		t.Fatal("expected at least 2 lines")
+	}
+	// Conflicts should still show in header since it's urgent.
+	headerLine := lines[1]
+	if !strings.Contains(headerLine, "conflicts") {
+		t.Error("header line should still show 'conflicts' for CONFLICTING state")
+	}
+}
+
 func TestRenderPRZoom_MinimalPR(t *testing.T) {
 	pr := client.TrackedPR{
 		Owner:  "a",

@@ -85,14 +85,43 @@ func renderPill(s client.Session, selected bool, glowPos int) string {
 	return renderPillWithName(s, pillName(s), selected, glowPos)
 }
 
+// isPassiveState returns true if the session state is idle or dead (not actively working).
+func isPassiveState(state string) bool {
+	return state == "idle" || state == "dead"
+}
+
+// pillNameMaxLen returns the max name length based on state and selection.
+// Selected pills show full 20-char names.
+// Active unselected (running/waiting): 8 chars — visible but compact.
+// Passive unselected (idle/dead): 4 chars — minimal footprint.
+func pillNameMaxLen(state string, selected bool) int {
+	if selected {
+		return 20
+	}
+	if isPassiveState(state) {
+		return 4
+	}
+	return 8 // running, waiting, or other active states
+}
+
 // renderPillWithName renders a pill using a pre-computed display name
 // (which may include a disambiguator).
+// Name length is tiered by state and selection for visual hierarchy.
 func renderPillWithName(s client.Session, displayName string, selected bool, glowPos int) string {
 	sc := stateColor(s.State)
 	dimBg := stateColorDim(s.State)
 	icon := stateIcon(s.State)
 
-	name := truncateMiddle(displayName, 20)
+	compact := isPassiveState(s.State) && !selected
+	maxLen := pillNameMaxLen(s.State, selected)
+
+	var name string
+	runes := []rune(displayName)
+	if len(runes) > maxLen {
+		name = string(runes[:maxLen])
+	} else {
+		name = displayName
+	}
 
 	label := icon + " " + name
 
@@ -107,13 +136,22 @@ func renderPillWithName(s client.Session, displayName string, selected bool, glo
 			Render(fmt.Sprintf("%d", n))
 	}
 
-	style := lipgloss.NewStyle().
-		Padding(0, 1).
-		Foreground(sc).
-		Background(dimBg)
+	var style lipgloss.Style
+	if compact {
+		// Passive unselected pills: no background, just dim text — lighter visual weight.
+		style = lipgloss.NewStyle().
+			Padding(0, 0).
+			Foreground(colorDimFg)
+	} else {
+		style = lipgloss.NewStyle().
+			Padding(0, 1).
+			Foreground(sc).
+			Background(dimBg)
+	}
 
 	if selected {
-		style = style.
+		style = lipgloss.NewStyle().
+			Padding(0, 1).
 			Bold(true).
 			Foreground(lipgloss.ANSIColor(15)).
 			Background(sc).

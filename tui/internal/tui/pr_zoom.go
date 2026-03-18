@@ -57,18 +57,11 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 	infoParts = append(infoParts, pr.HeadBranch+" → "+pr.BaseBranch)
 	infoParts = append(infoParts, fmt.Sprintf("+%d -%d", pr.Additions, pr.Deletions))
 	infoParts = append(infoParts, fmt.Sprintf("%d commits", pr.CommitCount))
-	if pr.Mergeable == "MERGEABLE" {
-		infoParts = append(infoParts, "mergeable")
-	} else if pr.Mergeable == "CONFLICTING" {
+	if pr.Mergeable == "CONFLICTING" {
 		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorDestructive).Render("conflicts"))
 	}
 	if pr.AutopilotMode == "auto" || pr.AutopilotMode == "yolo" {
 		infoParts = append(infoParts, "automerge")
-	}
-	if pr.MergeMethod != "" {
-		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorAccent).Render("⎇ "+pr.MergeMethod))
-	} else {
-		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorWaiting).Render("⎇ unset"))
 	}
 	if pr.AgentCostUSD > 0 {
 		infoParts = append(infoParts, lipgloss.NewStyle().Foreground(colorDimFg).
@@ -85,6 +78,100 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 
 	sep := lipgloss.NewStyle().Foreground(colorBorder).
 		Render(strings.Repeat("─", min(innerWidth, 60)))
+
+	// ── Done state: merged or closed PRs ──
+	isDone := pr.State == "merged" || pr.State == "closed"
+	if isDone {
+		var doneMsg string
+		if pr.State == "merged" {
+			doneMsg = lipgloss.NewStyle().
+				Foreground(colorDimFg).
+				Render("  \u2714 Merged \u2014 no further action required")
+		} else {
+			doneMsg = lipgloss.NewStyle().
+				Foreground(colorDimFg).
+				Render("  \u25cf Closed \u2014 no further action required")
+		}
+		bodyLines = append(bodyLines, doneMsg)
+		bodyLines = append(bodyLines, sep)
+	}
+
+	// ── Merge readiness summary line (skip for done PRs) ──
+	if !isDone {
+		var summaryParts []string
+
+		// Approval status.
+		approved := false
+		changesRequested := false
+		for _, r := range pr.Reviews {
+			if r.State == "APPROVED" {
+				approved = true
+			}
+			if r.State == "CHANGES_REQUESTED" {
+				changesRequested = true
+			}
+		}
+		if changesRequested {
+			summaryParts = append(summaryParts,
+				styleDestructive.Render("✗")+" "+
+					lipgloss.NewStyle().Foreground(colorDestructive).Render("changes requested"))
+		} else if approved {
+			summaryParts = append(summaryParts,
+				styleSafe.Render("✓")+" "+
+					lipgloss.NewStyle().Foreground(colorDimFg).Render("approved"))
+		} else if len(pr.Reviews) == 0 {
+			summaryParts = append(summaryParts,
+				lipgloss.NewStyle().Foreground(colorDimFg).Render("○ no review"))
+		}
+
+		// Checks summary.
+		if len(pr.Checks) > 0 {
+			passing, total := 0, len(pr.Checks)
+			for _, c := range pr.Checks {
+				if c.Conclusion == "SUCCESS" || c.Conclusion == "NEUTRAL" {
+					passing++
+				}
+			}
+			if passing == total {
+				summaryParts = append(summaryParts,
+					styleSafe.Render("✓")+" "+
+						lipgloss.NewStyle().Foreground(colorDimFg).
+						Render(fmt.Sprintf("checks (%d/%d)", passing, total)))
+			} else {
+				summaryParts = append(summaryParts,
+					styleDestructive.Render("✗")+" "+
+						lipgloss.NewStyle().Foreground(colorDestructive).
+						Render(fmt.Sprintf("checks (%d/%d)", passing, total)))
+			}
+		}
+
+		// Mergeable.
+		switch pr.Mergeable {
+		case "MERGEABLE":
+			summaryParts = append(summaryParts,
+				styleSafe.Render("✓")+" "+
+					lipgloss.NewStyle().Foreground(colorDimFg).Render("mergeable"))
+		case "CONFLICTING":
+			summaryParts = append(summaryParts,
+				styleDestructive.Render("✗")+" "+
+					lipgloss.NewStyle().Foreground(colorDestructive).Render("conflicts"))
+		}
+
+		// Merge method.
+		if pr.MergeMethod != "" {
+			summaryParts = append(summaryParts,
+				lipgloss.NewStyle().Foreground(colorAccent).Render("⎇ "+pr.MergeMethod))
+		} else {
+			summaryParts = append(summaryParts,
+				lipgloss.NewStyle().Foreground(colorWaiting).Render("⎇ unset"))
+		}
+
+		if len(summaryParts) > 0 {
+			bodyLines = append(bodyLines,
+				"  "+strings.Join(summaryParts, "  "))
+			bodyLines = append(bodyLines, sep)
+		}
+	}
 
 	// Checks section.
 	if len(pr.Checks) > 0 {

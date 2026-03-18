@@ -747,12 +747,11 @@ func (m Model) View() string {
 		mainContent = renderEmptyState(w, remainingHeight)
 	}
 
-	output := lipgloss.JoinVertical(lipgloss.Left,
-		statusLine,
-		mainContent,
-		hints,
-		strip,
-	)
+	var outputParts []string
+	outputParts = append(outputParts, statusLine)
+	outputParts = append(outputParts, mainContent, hints, strip)
+
+	output := lipgloss.JoinVertical(lipgloss.Left, outputParts...)
 
 	// Hard clip to terminal height to prevent overflow pushing status bar off screen.
 	lines := strings.Split(output, "\n")
@@ -785,43 +784,129 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 		Render(pluralize(len(sessions), "session", "sessions"))
 
 	prCount := ""
+	prBreakdownStr := ""
 	if len(prs) > 0 {
 		prCount = "  " + lipgloss.NewStyle().
 			Foreground(colorDimFg).
 			Render(pluralize(len(prs), "PR", "PRs"))
+
+		// PR state breakdown: passing / failing / running counts.
+		passing, failing, running, merged := 0, 0, 0, 0
+		for _, p := range prs {
+			switch p.State {
+			case "checks_passing", "approved":
+				passing++
+			case "checks_failing":
+				failing++
+			case "checks_running":
+				running++
+			case "merged":
+				merged++
+			}
+		}
+		var prParts []string
+		if passing > 0 {
+			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorRunning).
+				Render(fmt.Sprintf("%d\u2713", passing)))
+		}
+		if failing > 0 {
+			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorDestructive).
+				Render(fmt.Sprintf("%d\u2717", failing)))
+		}
+		if running > 0 {
+			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorWaiting).
+				Render(fmt.Sprintf("%d\u23f3", running)))
+		}
+		if merged > 0 {
+			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorDimFg).
+				Render(fmt.Sprintf("%d\u2714", merged)))
+		}
+		if len(prParts) > 0 {
+			prBreakdownStr = " " + strings.Join(prParts, " ")
+		}
 	}
 
 	pendingStr := ""
 	pending := countPending(sessions)
 	if pending > 0 {
-		pendingStr = lipgloss.NewStyle().
-			Foreground(colorOrange).
+		// Badge-style: dark text on orange background to catch the eye.
+		pendingBadge := lipgloss.NewStyle().
+			Foreground(lipgloss.ANSIColor(0)).
+			Background(colorOrange).
 			Bold(true).
-			Render(fmt.Sprintf("  \u26a1 %d pending", pending))
+			Padding(0, 1).
+			Render(fmt.Sprintf("\u26a1 %d PENDING", pending))
+		pendingStr = "  " + pendingBadge
+
+		// Find oldest pending session (by LastActivity time).
+		var oldestTime *time.Time
+		for _, s := range sessions {
+			if len(s.PendingTools) > 0 && s.LastActivity != nil {
+				if oldestTime == nil || s.LastActivity.Before(*oldestTime) {
+					t := *s.LastActivity
+					oldestTime = &t
+				}
+			}
+		}
+		if oldestTime != nil {
+			age := time.Since(*oldestTime)
+			pendingStr += lipgloss.NewStyle().
+				Foreground(colorOrange).
+				Render(fmt.Sprintf(" %s ago", formatAge(age)))
+		}
 	}
 
 	failingStr := ""
 	if failingPRs > 0 {
-		failingStr = lipgloss.NewStyle().
-			Foreground(colorDestructive).
+		// Badge-style: dark text on red background, consistent with pending badge.
+		failingBadge := lipgloss.NewStyle().
+			Foreground(lipgloss.ANSIColor(0)).
+			Background(colorDestructive).
 			Bold(true).
-			Render(fmt.Sprintf("  \u2717 %d failing", failingPRs))
+			Padding(0, 1).
+			Render(fmt.Sprintf("\u2717 %d FAILING", failingPRs))
+		failingStr = "  " + failingBadge
 	}
 
-	runningStr := ""
-	running := 0
-	for _, s := range sessions {
-		if s.State == "running" {
-			running++
+	// State breakdown: count sessions per state.
+	stateBreakdownStr := ""
+	if len(sessions) > 0 {
+		running, waiting, idle, dead := 0, 0, 0, 0
+		for _, s := range sessions {
+			switch s.State {
+			case "running":
+				running++
+			case "waiting":
+				waiting++
+			case "idle":
+				idle++
+			case "dead":
+				dead++
+			}
+		}
+		var parts []string
+		if running > 0 {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorRunning).
+				Render(fmt.Sprintf("%d\u25b6", running)))
+		}
+		if waiting > 0 {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorWaiting).
+				Render(fmt.Sprintf("%d\u23f8", waiting)))
+		}
+		if idle > 0 {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorDimFg).
+				Render(fmt.Sprintf("%d\u2714", idle)))
+		}
+		if dead > 0 {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorDead).
+				Render(fmt.Sprintf("%d\u25cf", dead)))
+		}
+		if len(parts) > 0 {
+			stateBreakdownStr = "  " + strings.Join(parts, " ")
 		}
 	}
-	if running > 0 {
-		runningStr = lipgloss.NewStyle().
-			Foreground(colorRunning).
-			Render(fmt.Sprintf("  \u25b6 %d running", running))
-	}
 
-	left := logo + "  " + connStatus + "  " + sessionCount + prCount + runningStr + pendingStr + failingStr
+	left := logo + "  " + connStatus + "  " + sessionCount + prCount + prBreakdownStr + stateBreakdownStr + pendingStr + failingStr
 
 	// Flash message (action feedback).
 	if flash != "" {

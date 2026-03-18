@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -46,6 +47,26 @@ func disambiguateNames(sessions []client.Session) map[string]string {
 	return result
 }
 
+// statePriority returns lower numbers for higher-priority (more urgent) states.
+func statePriority(s client.Session) int {
+	// Sessions with pending tools need attention first.
+	if len(s.PendingTools) > 0 {
+		return 0
+	}
+	switch s.State {
+	case "running":
+		return 1
+	case "waiting":
+		return 2
+	case "idle":
+		return 3
+	case "dead":
+		return 4
+	default:
+		return 5
+	}
+}
+
 // renderUnifiedStrip renders sessions + PRs in one strip with a separator.
 // It caps visible pills to fit within the given width, showing a "+N"
 // overflow indicator when pills are hidden.
@@ -54,6 +75,60 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		emptyStyle := lipgloss.NewStyle().Foreground(colorDimFg).Italic(true)
 		return styleStripBar.Width(width).Render(
 			emptyStyle.Render("  No active sessions or PRs"))
+	}
+
+	// Sort sessions by attention priority: pending > running > waiting > idle > dead.
+	// Track the selected session ID so we can remap selectedIdx after sorting.
+	var selectedSessionID string
+	if selectedIdx >= 0 && selectedIdx < len(sessions) {
+		selectedSessionID = sessions[selectedIdx].SessionID
+	}
+
+	// Work on a copy to avoid mutating the caller's slice.
+	sortedSessions := make([]client.Session, len(sessions))
+	copy(sortedSessions, sessions)
+	sort.SliceStable(sortedSessions, func(i, j int) bool {
+		return statePriority(sortedSessions[i]) < statePriority(sortedSessions[j])
+	})
+
+	// Remap selectedIdx to new position in sorted slice.
+	if selectedSessionID != "" {
+		for i, s := range sortedSessions {
+			if s.SessionID == selectedSessionID {
+				selectedIdx = i
+				break
+			}
+		}
+	}
+	sessions = sortedSessions
+
+	// Filter dead sessions when there are many sessions (>= 8) and none of
+	// them have pending tools or are currently selected. Show a compact count.
+	deadCount := 0
+	if len(sessions) >= 8 {
+		var activeAndIdle []client.Session
+		for _, s := range sessions {
+			isDead := s.State == "dead"
+			isSelectedSession := s.SessionID == selectedSessionID
+			hasPending := len(s.PendingTools) > 0
+			if isDead && !isSelectedSession && !hasPending {
+				deadCount++
+			} else {
+				activeAndIdle = append(activeAndIdle, s)
+			}
+		}
+		if deadCount > 0 {
+			// Remap selectedIdx for the shorter slice.
+			if selectedSessionID != "" {
+				for i, s := range activeAndIdle {
+					if s.SessionID == selectedSessionID {
+						selectedIdx = i
+						break
+					}
+				}
+			}
+			sessions = activeAndIdle
+		}
 	}
 
 	// Pre-compute disambiguated names for sessions.
@@ -70,6 +145,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		rendered string
 		width    int
 		isSelected bool
+		state    string // session state (empty for PR/summary pills)
 	}
 
 	// Build all pill entries.
@@ -80,11 +156,64 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 			rendered:   p,
 			width:      lipgloss.Width(p),
 			isSelected: i == selectedIdx,
+			state:      s.State,
 		})
 	}
 
+	// Append compact "(●N dead)" indicator if dead sessions were filtered.
+	if deadCount > 0 {
+		deadStr := lipgloss.NewStyle().Foreground(colorDimFg).Render(fmt.Sprintf("(\u25cf%d)", deadCount))
+		allPills = append(allPills, pillEntry{
+			rendered: deadStr,
+			width:    lipgloss.Width(deadStr),
+		})
+	}
+
+	// Filter terminal PRs when active ones exist: hide merged/closed PRs from
+	// the visible strip and show a compact count indicator instead.
+	visiblePRs := prs
+	doneCount := 0
+	hasActivePR := false
+	for _, p := range prs {
+		if p.State != "merged" && p.State != "closed" {
+			hasActivePR = true
+			break
+		}
+	}
+	if hasActivePR {
+		var filtered []client.TrackedPR
+		for _, p := range prs {
+			if p.State == "merged" || p.State == "closed" {
+				doneCount++
+			} else {
+				filtered = append(filtered, p)
+			}
+		}
+		// Remap selectedIdx if we filtered out PRs before the selected one.
+		if selectedIdx >= len(sessions) {
+			origPRIdx := selectedIdx - len(sessions)
+			if origPRIdx < len(prs) {
+				selectedPR := prs[origPRIdx]
+				if selectedPR.State == "merged" || selectedPR.State == "closed" {
+					// Selected PR was filtered; keep it visible.
+					filtered = append(filtered, selectedPR)
+					selectedIdx = len(sessions) + len(filtered) - 1
+				} else {
+					// Remap to new position in filtered slice.
+					for newI, p := range filtered {
+						if p.Number == selectedPR.Number && p.Owner == selectedPR.Owner {
+							selectedIdx = len(sessions) + newI
+							break
+						}
+					}
+				}
+			}
+		}
+		visiblePRs = filtered
+	}
+
 	// Separator between sessions and PRs.
-	hasSep := len(sessions) > 0 && len(prs) > 0
+	hasSep := len(sessions) > 0 && len(visiblePRs) > 0
 	sepStr := ""
 	sepWidth := 0
 	if hasSep {
@@ -92,7 +221,11 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		sepWidth = lipgloss.Width(sepStr) + 2 // " │ " with surrounding spaces
 	}
 
-	for i, p := range prs {
+	// sepBoundary is the allPills index where the separator should be inserted.
+	// Initially == len(sessions) (no summary pill prepended yet).
+	sepBoundary := len(sessions)
+
+	for i, p := range visiblePRs {
 		prIdx := len(sessions) + i
 		pill := renderPRPill(p, prIdx == selectedIdx)
 		allPills = append(allPills, pillEntry{
@@ -100,6 +233,55 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 			width:      lipgloss.Width(pill),
 			isSelected: prIdx == selectedIdx,
 		})
+	}
+
+	// Append a compact "done" indicator if any PRs were filtered.
+	if doneCount > 0 {
+		doneStr := lipgloss.NewStyle().Foreground(colorDimFg).Render(fmt.Sprintf("(+%d done)", doneCount))
+		// Add separator if no visible PRs were rendered (only done PRs).
+		if !hasSep && len(sessions) > 0 {
+			sepStr = lipgloss.NewStyle().Foreground(colorBorder).Render("│")
+			sepWidth = lipgloss.Width(sepStr) + 2
+			hasSep = true
+		}
+		allPills = append(allPills, pillEntry{
+			rendered:   doneStr,
+			width:      lipgloss.Width(doneStr),
+			isSelected: false,
+		})
+	}
+
+	// Prepend a compact state-group summary when there are many sessions.
+	// Format: "▶2 ⏸1 ✔5 ●2" — lets user scan state distribution instantly.
+	// Done after PR processing so we can update selectedIdx and sepBoundary cleanly.
+	if len(sessions) >= 5 {
+		counts := map[string]int{}
+		for _, s := range sessions {
+			counts[s.State]++
+		}
+		var parts []string
+		if n := counts["running"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u25b6%d", n))
+		}
+		if n := counts["waiting"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u23f8%d", n))
+		}
+		if n := counts["idle"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u2714%d", n))
+		}
+		if n := counts["dead"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("\u25cf%d", n))
+		}
+		if len(parts) > 0 {
+			summaryStr := lipgloss.NewStyle().Foreground(colorDimFg).Render(strings.Join(parts, " "))
+			summaryPill := pillEntry{rendered: summaryStr, width: lipgloss.Width(summaryStr)}
+			// Prepend: shift all indices by 1.
+			allPills = append([]pillEntry{summaryPill}, allPills...)
+			if selectedIdx >= 0 {
+				selectedIdx++
+			}
+			sepBoundary++ // separator now one position further right
+		}
 	}
 
 	// Fit pills within budget, always including the selected pill.
@@ -144,7 +326,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		// Everything fits — render all.
 		var pills []string
 		for i, p := range allPills {
-			if hasSep && i == len(sessions) {
+			if hasSep && i == sepBoundary {
 				pills = append(pills, sepStr)
 			}
 			pills = append(pills, p.rendered)
@@ -167,7 +349,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		if visEnd+1 < totalPills {
 			nextW := allPills[visEnd+1].width + spaceWidth
 			// Account for separator if crossing the boundary.
-			if hasSep && visEnd+1 == len(sessions) {
+			if hasSep && visEnd+1 == sepBoundary {
 				nextW += sepWidth
 			}
 			// Reserve space for left overflow indicator.
@@ -188,7 +370,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		// Try left.
 		if visStart-1 >= 0 {
 			nextW := allPills[visStart-1].width + spaceWidth
-			if hasSep && visStart == len(sessions) {
+			if hasSep && visStart == sepBoundary {
 				nextW += sepWidth
 			}
 			leftOverflow := 0
@@ -210,35 +392,80 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		}
 	}
 
+	// overflowLabel builds an overflow indicator like "+3" or "+3(▶2⏸1)"
+	// for hidden pills. If any hidden pills are active sessions (running/waiting),
+	// the state breakdown is shown to prevent "+N confusion".
+	overflowLabel := func(hiddenPills []pillEntry) string {
+		n := len(hiddenPills)
+		if n == 0 {
+			return ""
+		}
+		stateCounts := map[string]int{}
+		for _, p := range hiddenPills {
+			if p.state != "" {
+				stateCounts[p.state]++
+			}
+		}
+		var stateParts []string
+		if c := stateCounts["running"]; c > 0 {
+			stateParts = append(stateParts, fmt.Sprintf("\u25b6%d", c))
+		}
+		if c := stateCounts["waiting"]; c > 0 {
+			stateParts = append(stateParts, fmt.Sprintf("\u23f8%d", c))
+		}
+		if len(stateParts) > 0 {
+			return fmt.Sprintf("+%d(%s)", n, strings.Join(stateParts, ""))
+		}
+		return fmt.Sprintf("+%d", n)
+	}
+
 	// Build visible pills with overflow indicators.
 	var pills []string
 	if visStart > 0 {
-		pills = append(pills, overflowStyle.Render(fmt.Sprintf("+%d", visStart)))
+		pills = append(pills, overflowStyle.Render(overflowLabel(allPills[:visStart])))
 	}
 	for i := visStart; i <= visEnd; i++ {
-		if hasSep && i == len(sessions) && visStart <= len(sessions)-1 {
+		if hasSep && i == sepBoundary && visStart <= sepBoundary-1 {
 			pills = append(pills, sepStr)
 		}
 		pills = append(pills, allPills[i].rendered)
 	}
 	if visEnd < totalPills-1 {
-		pills = append(pills, overflowStyle.Render(fmt.Sprintf("+%d", totalPills-1-visEnd)))
+		pills = append(pills, overflowStyle.Render(overflowLabel(allPills[visEnd+1:])))
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Center, interleave(pills, " ")...)
 	return styleStripBar.Width(width).Render(row)
 }
 
+// prStateNeedsTitle returns true for PR states where the title adds context.
+// Critical states (failing checks, needs review) show the title so the user
+// can act. Non-critical states (running checks, passing) just show number.
+func prStateNeedsTitle(state string) bool {
+	switch state {
+	case "checks_failing", "approved":
+		return true
+	default:
+		return false
+	}
+}
+
 // renderPRPill renders a single PR pill in the strip.
 func renderPRPill(p client.TrackedPR, selected bool) string {
 	icon := prPillIcon(p.State)
 
-	// For merged PRs, just show "#N" since the title no longer matters.
+	// Show title only for: selected pills, critical states (failing/approved),
+	// or when merged/closed (which show compact "#N" anyway — handled below).
 	var label string
 	if p.State == "merged" || p.State == "closed" {
+		// Terminal state: just number, no title needed.
 		label = fmt.Sprintf("%s #%d", icon, p.Number)
-	} else {
+	} else if selected || prStateNeedsTitle(p.State) {
+		// Important: show title for context.
 		label = fmt.Sprintf("%s #%d %s", icon, p.Number, truncateWordBoundary(p.Title, 15))
+	} else {
+		// Non-critical unselected: compact — icon + repo + number.
+		label = fmt.Sprintf("%s %s#%d", icon, p.Repo, p.Number)
 	}
 
 	sc := prStateColor(p.State)
@@ -247,8 +474,16 @@ func renderPRPill(p client.TrackedPR, selected bool) string {
 		Padding(0, 1).
 		Foreground(sc)
 
+	// Critical unselected PRs (failing checks, approved awaiting merge) get
+	// bold + dim background tint to signal urgency without the full border.
+	if !selected && prStateNeedsTitle(p.State) {
+		dimBg := prStateDimBg(p.State)
+		style = style.Bold(true).Background(dimBg)
+	}
+
 	if selected {
-		style = style.
+		style = lipgloss.NewStyle().
+			Padding(0, 1).
 			Bold(true).
 			Foreground(lipgloss.ANSIColor(15)).
 			Background(sc).
@@ -273,6 +508,18 @@ func prPillIcon(state string) string {
 		return "\u2713"
 	default:
 		return "\u2022"
+	}
+}
+
+// prStateDimBg returns a muted background for critical unselected PR pills.
+func prStateDimBg(state string) lipgloss.TerminalColor {
+	switch state {
+	case "checks_failing":
+		return lipgloss.ANSIColor(1) // dark red — failing is urgent
+	case "approved":
+		return lipgloss.ANSIColor(2) // dark green — approved/ready to merge
+	default:
+		return lipgloss.ANSIColor(0) // black (no tint)
 	}
 }
 

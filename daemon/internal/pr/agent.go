@@ -1,6 +1,8 @@
 package pr
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -57,6 +59,11 @@ func cloneForAgent(owner, repo, branch string) (string, error) {
 	return tmpDir, nil
 }
 
+// statusInstruction is appended to all agent prompts to get live status updates.
+const statusInstruction = "\n\nIMPORTANT: At each major step, print a short status line starting with " +
+	"\"STATUS: \" (e.g. \"STATUS: reading CI logs\", \"STATUS: found root cause in foo.go\", " +
+	"\"STATUS: running tests\", \"STATUS: pushing fix\"). These are shown in a live dashboard."
+
 // --- command builders ---
 
 func buildFixCICmd(pr *TrackedPR, workDir string) *exec.Cmd {
@@ -82,10 +89,11 @@ func buildFixCICmd(pr *TrackedPR, workDir string) *exec.Cmd {
 			"Do not change test expectations unless the test itself is wrong.",
 		pr.Number, pr.Owner, pr.Repo, pr.HeadBranch,
 		strings.Join(failing, "\n"),
-	)
+	) + statusInstruction
 
 	args := []string{
 		"-p", prompt,
+		"--output-format", "stream-json", "--verbose",
 		"--no-session-persistence",
 		"--max-budget-usd", "5",
 		"--model", "sonnet",
@@ -117,10 +125,11 @@ func buildCodeReviewCmd(pr *TrackedPR, workDir string) *exec.Cmd {
 			"If the code is clean, output: []\n"+
 			"Output the JSON array and nothing else.",
 		pr.HeadBranch, pr.BaseBranch, pr.BaseBranch,
-	)
+	) + statusInstruction
 
 	args := []string{
 		"-p", prompt,
+		"--output-format", "stream-json", "--verbose",
 		"--no-session-persistence",
 		"--max-budget-usd", "3",
 		"--model", "sonnet",
@@ -151,10 +160,11 @@ func buildFixReviewCmd(pr *TrackedPR, workDir string) *exec.Cmd {
 			"1. Run tests to verify nothing is broken\n"+
 			"2. Commit and push to the current branch",
 		strings.Join(issues, "\n"),
-	)
+	) + statusInstruction
 
 	args := []string{
 		"-p", prompt,
+		"--output-format", "stream-json", "--verbose",
 		"--no-session-persistence",
 		"--max-budget-usd", "5",
 		"--model", "sonnet",
@@ -173,6 +183,147 @@ func buildFixReviewCmd(pr *TrackedPR, workDir string) *exec.Cmd {
 	cmd := exec.Command(claudeBin(), args...)
 	cmd.Dir = workDir
 	return cmd
+}
+
+// --- streaming agent runner ---
+
+// streamEvent is the minimal structure for parsing claude stream-json events.
+type streamEvent struct {
+	Type    string `json:"type"`
+	Message struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"message"`
+	Result   string  `json:"result"`
+	CostUSD  float64 `json:"total_cost_usd"`
+	Duration float64 `json:"duration_ms"`
+}
+
+// runStreamingAgent runs a claude -p command with stream-json output,
+// parsing STATUS: lines and forwarding them to the PR timeline in real-time.
+// Returns the final result text and accumulated full output for logging.
+func (p *Poller) runStreamingAgent(ctx context.Context, cmd *exec.Cmd, key, agentType string) (result string, allOutput []byte, err error) {
+	stdout, pipeErr := cmd.StdoutPipe()
+	if pipeErr != nil {
+		return "", nil, fmt.Errorf("stdout pipe: %w", pipeErr)
+	}
+	// Capture stderr separately for diagnostics.
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
+	if startErr := cmd.Start(); startErr != nil {
+		return "", nil, fmt.Errorf("start: %w", startErr)
+	}
+
+	var fullOutput bytes.Buffer
+	scanner := bufio.NewScanner(stdout)
+	// stream-json can have long lines (tool results with file contents).
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+
+	// Live stream log — write every event to a file for debugging.
+	safe := strings.NewReplacer("/", "-", "#", "-").Replace(key)
+	streamLogPath := fmt.Sprintf("/tmp/csm-agent-%s-%s-stream.log", safe, agentType)
+	streamLog, _ := os.Create(streamLogPath)
+	defer func() {
+		if streamLog != nil {
+			streamLog.Close()
+		}
+	}()
+	log.Printf("pr: agent %s stream log: %s", agentType, streamLogPath)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		fullOutput.Write(line)
+		fullOutput.WriteByte('\n')
+		if streamLog != nil {
+			streamLog.Write(line)
+			streamLog.WriteString("\n")
+			streamLog.Sync()
+		}
+
+		var ev streamEvent
+		if json.Unmarshal(line, &ev) != nil {
+			continue
+		}
+
+		switch ev.Type {
+		case "assistant":
+			// Look for STATUS: lines in assistant text content.
+			for _, block := range ev.Message.Content {
+				if block.Type != "text" {
+					continue
+				}
+				for _, textLine := range strings.Split(block.Text, "\n") {
+					trimmed := strings.TrimSpace(textLine)
+					if strings.HasPrefix(trimmed, "STATUS:") {
+						status := strings.TrimSpace(strings.TrimPrefix(trimmed, "STATUS:"))
+						if status != "" {
+							p.agentProgress(key, agentType, status)
+						}
+					}
+				}
+			}
+		case "result":
+			result = ev.Result
+			if ev.CostUSD > 0 {
+				p.agentCostUpdate(key, ev.CostUSD)
+			}
+		}
+	}
+
+	waitErr := cmd.Wait()
+
+	// Append stderr to output for logging.
+	if stderrBuf.Len() > 0 {
+		fullOutput.WriteString("\n--- stderr ---\n")
+		fullOutput.Write(stderrBuf.Bytes())
+	}
+
+	return result, fullOutput.Bytes(), waitErr
+}
+
+// agentLabel returns a human-friendly label for a timeline prefix.
+func agentLabel(agentType string) string {
+	switch agentType {
+	case "fix_ci":
+		return "fix-CI"
+	case "review":
+		return "review"
+	case "fix_review":
+		return "fix-review"
+	default:
+		return agentType
+	}
+}
+
+// agentProgress adds a status update to the PR timeline from a running agent.
+func (p *Poller) agentProgress(key, agentType, status string) {
+	p.mu.Lock()
+	pr, ok := p.tracked[key]
+	if ok {
+		pr.Timeline = append(pr.Timeline, PREvent{
+			Time: time.Now(), Icon: "⚙",
+			Message: agentLabel(agentType) + ": " + status,
+		})
+		p.save()
+	}
+	p.mu.Unlock()
+
+	if ok && p.onChange != nil {
+		p.onChange()
+	}
+}
+
+// agentCostUpdate records the agent cost on the PR.
+func (p *Poller) agentCostUpdate(key string, costUSD float64) {
+	p.mu.Lock()
+	pr, ok := p.tracked[key]
+	if ok {
+		pr.AgentCostUSD += costUSD
+	}
+	p.mu.Unlock()
 }
 
 // --- spawn functions ---
@@ -198,7 +349,7 @@ func (p *Poller) spawnFixCI(pr *TrackedPR) {
 		cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
 		cmd.Dir = workDir
 
-		output, err := cmd.CombinedOutput()
+		_, output, err := p.runStreamingAgent(ctx, cmd, key, "fix_ci")
 		p.agentComplete(key, "fix_ci", err, output)
 	}()
 }
@@ -222,7 +373,12 @@ func (p *Poller) spawnCodeReview(pr *TrackedPR) {
 		cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
 		cmd.Dir = workDir
 
-		output, err := cmd.CombinedOutput()
+		result, output, err := p.runStreamingAgent(ctx, cmd, key, "review")
+		// For review, the result field contains the final text output.
+		// Pass it as output for parseReviewOutput.
+		if err == nil && result != "" {
+			output = []byte(result)
+		}
 		p.agentComplete(key, "review", err, output)
 	}()
 }
@@ -246,9 +402,28 @@ func (p *Poller) spawnFixReview(pr *TrackedPR) {
 		cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
 		cmd.Dir = workDir
 
-		output, err := cmd.CombinedOutput()
+		_, output, err := p.runStreamingAgent(ctx, cmd, key, "fix_review")
 		p.agentComplete(key, "fix_review", err, output)
 	}()
+}
+
+// writeAgentLog writes agent output + error to /tmp/csm-agent-<key>-<type>.log.
+// Returns the log path for use in the daemon log line.
+func writeAgentLog(key, agentType string, output []byte, runErr error) string {
+	// Sanitize key for use in filename (replace / and # with -).
+	safe := strings.NewReplacer("/", "-", "#", "-").Replace(key)
+	path := fmt.Sprintf("/tmp/csm-agent-%s-%s.log", safe, agentType)
+	var buf strings.Builder
+	buf.WriteString(fmt.Sprintf("=== CSM agent log: %s %s ===\n", key, agentType))
+	buf.WriteString(fmt.Sprintf("error: %v\n", runErr))
+	buf.WriteString("--- output ---\n")
+	if len(output) > 0 {
+		buf.Write(output)
+	} else {
+		buf.WriteString("(no output)\n")
+	}
+	_ = os.WriteFile(path, []byte(buf.String()), 0o644)
+	return path
 }
 
 // --- completion callback ---
@@ -268,7 +443,8 @@ func (p *Poller) agentComplete(key, agentType string, err error, output []byte) 
 			Time: time.Now(), Icon: "✗",
 			Message: fmt.Sprintf("Agent %s failed: %v", agentType, err),
 		})
-		log.Printf("pr: agent %s for %s failed: %v", agentType, key, err)
+		logFile := writeAgentLog(key, agentType, output, err)
+		log.Printf("pr: agent %s for %s failed: %v (log: %s)", agentType, key, err, logFile)
 	} else {
 		msg := fmt.Sprintf("Agent %s completed", agentType)
 

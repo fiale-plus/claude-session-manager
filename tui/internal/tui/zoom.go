@@ -232,6 +232,7 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 	return strings.Join(renderedLines, "\n")
 }
 
+
 func activityIcon(actType string) string {
 	switch actType {
 	case "tool_use":
