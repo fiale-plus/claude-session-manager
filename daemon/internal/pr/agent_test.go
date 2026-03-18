@@ -1,6 +1,7 @@
 package pr
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -170,6 +171,106 @@ func TestParseReviewOutput_Empty(t *testing.T) {
 	}
 	if len(findings) != 0 {
 		t.Errorf("empty output should return empty findings")
+	}
+}
+
+// === stream-json flags ===
+
+func TestBuildFixCICmd_StreamJSON(t *testing.T) {
+	pr := &TrackedPR{
+		Owner: "test", Repo: "repo", Number: 1,
+		HeadBranch: "fix", AutopilotMode: PRAuto,
+		Checks: []Check{{Name: "ci", Conclusion: "FAILURE"}},
+	}
+	args := strings.Join(buildFixCICmd(pr, "/tmp").Args, " ")
+	if !strings.Contains(args, "--output-format stream-json") {
+		t.Error("fix_ci should use stream-json output")
+	}
+	if !strings.Contains(args, "--verbose") {
+		t.Error("stream-json requires --verbose")
+	}
+	if !strings.Contains(args, "STATUS:") {
+		t.Error("prompt should contain STATUS instruction")
+	}
+}
+
+func TestBuildCodeReviewCmd_StreamJSON(t *testing.T) {
+	pr := &TrackedPR{
+		Owner: "test", Repo: "repo", Number: 1,
+		HeadBranch: "feat", BaseBranch: "main",
+	}
+	args := strings.Join(buildCodeReviewCmd(pr, "/tmp").Args, " ")
+	if !strings.Contains(args, "--output-format stream-json") {
+		t.Error("review should use stream-json output")
+	}
+	if !strings.Contains(args, "--verbose") {
+		t.Error("stream-json requires --verbose")
+	}
+}
+
+func TestBuildFixReviewCmd_StreamJSON(t *testing.T) {
+	pr := &TrackedPR{
+		Owner: "test", Repo: "repo", Number: 1,
+		HeadBranch: "fix", AutopilotMode: PRAuto,
+		ReviewFindings: []ReviewFinding{
+			{Severity: SeverityCritical, File: "a.go", Message: "bug"},
+		},
+	}
+	args := strings.Join(buildFixReviewCmd(pr, "/tmp").Args, " ")
+	if !strings.Contains(args, "--output-format stream-json") {
+		t.Error("fix_review should use stream-json output")
+	}
+	if !strings.Contains(args, "--verbose") {
+		t.Error("stream-json requires --verbose")
+	}
+}
+
+// === agentLabel ===
+
+func TestAgentLabel(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"fix_ci", "fix-CI"},
+		{"review", "review"},
+		{"fix_review", "fix-review"},
+		{"unknown", "unknown"},
+	}
+	for _, c := range cases {
+		if got := agentLabel(c.in); got != c.want {
+			t.Errorf("agentLabel(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// === writeAgentLog ===
+
+func TestWriteAgentLog_CreatesFile(t *testing.T) {
+	path := writeAgentLog("test/repo#1", "fix_ci", []byte("some output"), nil)
+	defer os.Remove(path)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read log: %v", err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "test/repo#1") {
+		t.Error("log should contain PR key")
+	}
+	if !strings.Contains(s, "some output") {
+		t.Error("log should contain output")
+	}
+}
+
+func TestWriteAgentLog_NoOutput(t *testing.T) {
+	path := writeAgentLog("test/repo#2", "review", nil, fmt.Errorf("signal: killed"))
+	defer os.Remove(path)
+
+	data, _ := os.ReadFile(path)
+	s := string(data)
+	if !strings.Contains(s, "signal: killed") {
+		t.Error("log should contain error")
+	}
+	if !strings.Contains(s, "(no output)") {
+		t.Error("log should indicate no output")
 	}
 }
 

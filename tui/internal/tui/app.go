@@ -731,25 +731,13 @@ func (m Model) View() string {
 
 	remainingHeight := m.height - bottomHeight - statusHeight
 
-	// Fleet map: 1-line session overview shown above session zoom when 3+ sessions.
-	fleetMap := ""
-	if isSession && !m.queueVisible {
-		if sel := m.selected(); sel != nil {
-			fleetMap = renderFleetMap(m.sessions, sel.SessionID, w)
-		}
-	}
-	fleetMapHeight := 0
-	if fleetMap != "" {
-		fleetMapHeight = 1
-	}
-
 	// Main content area.
 	mainContent := ""
 	if m.queueVisible && hasPending {
 		mainContent = renderQueue(m.sessions, w, remainingHeight)
 	} else if isSession {
 		if sel := m.selected(); sel != nil {
-			mainContent = renderZoom(*sel, w, remainingHeight-fleetMapHeight, m.scrollOffset)
+			mainContent = renderZoom(*sel, w, remainingHeight, m.scrollOffset)
 		} else {
 			mainContent = renderEmptyState(w, remainingHeight)
 		}
@@ -761,9 +749,6 @@ func (m Model) View() string {
 
 	var outputParts []string
 	outputParts = append(outputParts, statusLine)
-	if fleetMap != "" {
-		outputParts = append(outputParts, fleetMap)
-	}
 	outputParts = append(outputParts, mainContent, hints, strip)
 
 	output := lipgloss.JoinVertical(lipgloss.Left, outputParts...)
