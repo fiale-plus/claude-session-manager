@@ -475,8 +475,11 @@ func TestPoll_MultiplePRs(t *testing.T) {
 	changed := false
 	storePath := filepath.Join(t.TempDir(), "prs.json")
 	p := NewPoller(storePath, func() { changed = true })
-	p.Add("test", "repo", 1)
-	p.Add("test", "repo", 2)
+	pr1, _ := p.Add("test", "repo", 1)
+	pr2, _ := p.Add("test", "repo", 2)
+	// Disable review spawning — this test is about polling, not agent execution.
+	pr1.ReviewState = "clean"
+	pr2.ReviewState = "clean"
 
 	p.Poll()
 
