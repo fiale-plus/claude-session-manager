@@ -30,6 +30,7 @@ func NewPoller(storePath string, onChange func()) *Poller {
 		storePath:   storePath,
 	}
 	p.load()
+	p.migrateReviewEnabled()
 	return p
 }
 
@@ -56,6 +57,7 @@ func (p *Poller) Add(owner, repo string, number int) (*TrackedPR, bool) {
 		AutopilotMode: PRAuto,
 		Hammer:        true,
 		MaxHammer:     3,
+		ReviewEnabled: true,
 		MergeMethod:   method,
 		Timeline:      []PREvent{{Time: time.Now(), Icon: "📝", Message: "Added to tracking"}},
 	}
@@ -165,6 +167,34 @@ func (p *Poller) CycleAutopilot(owner, repo string, number int) string {
 		p.onChange()
 	}
 	return pr.AutopilotMode
+}
+
+// ToggleReview flips ReviewEnabled for a PR.
+func (p *Poller) ToggleReview(owner, repo string, number int) bool {
+	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	pr, ok := p.tracked[key]
+	if !ok {
+		return false
+	}
+
+	pr.ReviewEnabled = !pr.ReviewEnabled
+	label := "enabled"
+	if !pr.ReviewEnabled {
+		label = "disabled"
+	}
+	pr.Timeline = append(pr.Timeline, PREvent{
+		Time:    time.Now(),
+		Icon:    "🔍",
+		Message: fmt.Sprintf("Code review %s", label),
+	})
+	p.save()
+	if p.onChange != nil {
+		p.onChange()
+	}
+	return true
 }
 
 // FailingCount returns how many PRs have failing checks.
@@ -592,6 +622,21 @@ func (p *Poller) load() {
 		return
 	}
 	p.tracked = prs
+}
+
+// migrateReviewEnabled sets ReviewEnabled=true for non-terminal PRs that
+// were persisted before the field existed (zero-value false).
+func (p *Poller) migrateReviewEnabled() {
+	changed := false
+	for _, pr := range p.tracked {
+		if !pr.ReviewEnabled && pr.State != StateMerged && pr.State != StateClosed {
+			pr.ReviewEnabled = true
+			changed = true
+		}
+	}
+	if changed {
+		p.save()
+	}
 }
 
 func (p *Poller) save() {

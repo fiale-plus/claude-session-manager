@@ -425,37 +425,44 @@ func TestIsAgentRunning(t *testing.T) {
 // === ShouldReview ===
 
 func TestShouldReview_ChecksPassing(t *testing.T) {
-	pr := TrackedPR{AutopilotMode: PRAuto, State: StateChecksPassing}
+	pr := TrackedPR{AutopilotMode: PRAuto, State: StateChecksPassing, ReviewEnabled: true}
 	if !pr.ShouldReview() {
-		t.Error("AUTO + checks_passing + no review state should review")
+		t.Error("AUTO + checks_passing + review enabled should review")
 	}
 }
 
 func TestShouldReview_AutopilotOff(t *testing.T) {
-	pr := TrackedPR{AutopilotMode: PROff, State: StateChecksPassing}
+	pr := TrackedPR{AutopilotMode: PROff, State: StateChecksPassing, ReviewEnabled: true}
 	if pr.ShouldReview() {
 		t.Error("autopilot off should not review")
 	}
 }
 
 func TestShouldReview_ChecksFailing(t *testing.T) {
-	pr := TrackedPR{AutopilotMode: PRAuto, State: StateChecksFailing}
+	pr := TrackedPR{AutopilotMode: PRAuto, State: StateChecksFailing, ReviewEnabled: true}
 	if pr.ShouldReview() {
 		t.Error("checks failing should not review")
 	}
 }
 
 func TestShouldReview_AlreadyReviewed(t *testing.T) {
-	pr := TrackedPR{AutopilotMode: PRAuto, State: StateChecksPassing, ReviewState: "clean"}
+	pr := TrackedPR{AutopilotMode: PRAuto, State: StateChecksPassing, ReviewState: "clean", ReviewEnabled: true}
 	if pr.ShouldReview() {
 		t.Error("already reviewed should not review again")
 	}
 }
 
 func TestShouldReview_Approved(t *testing.T) {
-	pr := TrackedPR{AutopilotMode: PRAuto, State: StateApproved}
+	pr := TrackedPR{AutopilotMode: PRAuto, State: StateApproved, ReviewEnabled: true}
 	if !pr.ShouldReview() {
 		t.Error("approved state should also trigger review")
+	}
+}
+
+func TestShouldReview_ReviewDisabled(t *testing.T) {
+	pr := TrackedPR{AutopilotMode: PRAuto, State: StateChecksPassing, ReviewEnabled: false}
+	if pr.ShouldReview() {
+		t.Error("review disabled should not review")
 	}
 }
 

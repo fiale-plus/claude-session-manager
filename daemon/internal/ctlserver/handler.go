@@ -74,6 +74,8 @@ func (h *Handler) Handle(conn net.Conn) {
 			h.handleCyclePRAutopilot(conn, req.PRKey)
 		case "set_merge_method":
 			h.handleSetMergeMethod(conn, req.PRKey, req.MergeMethod)
+		case "toggle_review":
+			h.handleToggleReview(conn, req.PRKey)
 		}
 	}
 }
@@ -245,6 +247,30 @@ func (h *Handler) handleRemovePR(conn net.Conn, key string) {
 	fmt.Sscanf(parts[1], "%d", &number)
 	h.prPoll.Remove(ownerRepo[0], ownerRepo[1], number)
 	ok := true
+	writeJSON(conn, ctlResponse{OK: &ok})
+}
+
+func (h *Handler) handleToggleReview(conn net.Conn, key string) {
+	if h.prPoll == nil {
+		f := false
+		writeJSON(conn, ctlResponse{OK: &f})
+		return
+	}
+	parts := strings.SplitN(key, "#", 2)
+	if len(parts) != 2 {
+		f := false
+		writeJSON(conn, ctlResponse{OK: &f})
+		return
+	}
+	ownerRepo := strings.SplitN(parts[0], "/", 2)
+	if len(ownerRepo) != 2 {
+		f := false
+		writeJSON(conn, ctlResponse{OK: &f})
+		return
+	}
+	var number int
+	fmt.Sscanf(parts[1], "%d", &number)
+	ok := h.prPoll.ToggleReview(ownerRepo[0], ownerRepo[1], number)
 	writeJSON(conn, ctlResponse{OK: &ok})
 }
 
