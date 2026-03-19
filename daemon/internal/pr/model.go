@@ -84,7 +84,7 @@ type TrackedPR struct {
 	MaxHammer      int    `json:"max_hammer"`       // max fix attempts (default 3)
 	MergeMethod    string `json:"merge_method"`     // "squash", "merge", "rebase", "aviator", "" = unset
 	MergeTriggered bool   `json:"merge_triggered"`  // true once auto-merge has been fired; resets on check regression
-	RunReview      bool   `json:"run_review"`       // run code-review skill on creation
+	ReviewEnabled  bool   `json:"run_review"`       // toggle code review on/off (independent of autopilot)
 
 	// Agent pipeline state
 	AgentRunning    string          `json:"agent_running,omitempty"`     // "" | "fix_ci" | "review" | "fix_review"
@@ -204,6 +204,9 @@ func (pr *TrackedPR) IsAgentRunning() bool {
 
 // ShouldReview returns true if the PR should be code-reviewed.
 func (pr *TrackedPR) ShouldReview() bool {
+	if !pr.ReviewEnabled {
+		return false
+	}
 	if pr.AutopilotMode == PROff {
 		return false
 	}

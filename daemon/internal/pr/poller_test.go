@@ -50,6 +50,9 @@ func TestAdd_New(t *testing.T) {
 	if pr.MergeMethod != "" {
 		t.Errorf("merge_method = %q, want empty (unset for new repo)", pr.MergeMethod)
 	}
+	if !pr.ReviewEnabled {
+		t.Error("ReviewEnabled should default to true")
+	}
 	if len(pr.Timeline) != 1 {
 		t.Errorf("timeline should have 1 event, got %d", len(pr.Timeline))
 	}

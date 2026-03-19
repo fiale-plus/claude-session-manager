@@ -93,13 +93,13 @@ func isPassiveState(state string) bool {
 // pillNameMaxLen returns the max name length based on state and selection.
 // Selected pills show full 20-char names.
 // Active unselected (running/waiting): 8 chars — visible but compact.
-// Passive unselected (idle/dead): 4 chars — minimal footprint.
+// Passive unselected (idle/dead): 6 chars — compact but recognizable.
 func pillNameMaxLen(state string, selected bool) int {
 	if selected {
 		return 20
 	}
 	if isPassiveState(state) {
-		return 4
+		return 6
 	}
 	return 8 // running, waiting, or other active states
 }
@@ -140,7 +140,7 @@ func renderPillWithName(s client.Session, displayName string, selected bool, glo
 	if compact {
 		// Passive unselected pills: no background, just dim text — lighter visual weight.
 		style = lipgloss.NewStyle().
-			Padding(0, 0).
+			Padding(0, 1).
 			Foreground(colorDimFg)
 	} else {
 		style = lipgloss.NewStyle().

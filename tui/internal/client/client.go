@@ -68,6 +68,7 @@ type TrackedPR struct {
 	Hammer        bool      `json:"hammer"`
 	HammerCount   int       `json:"hammer_count"`
 	MergeMethod   string    `json:"merge_method"`
+	ReviewEnabled bool      `json:"run_review"`
 	CreatedAt     time.Time `json:"created_at"`
 	Timeline      []PREvent `json:"timeline"`
 
@@ -268,6 +269,12 @@ func (c *Client) RemovePR(key string) error {
 // CyclePRAutopilot cycles PR autopilot: off → auto → yolo → off.
 func (c *Client) CyclePRAutopilot(key string) error {
 	_, err := c.sendCommand(request{Action: "cycle_pr_autopilot", PRKey: key})
+	return err
+}
+
+// TogglePRReview toggles code review on/off for a PR.
+func (c *Client) TogglePRReview(key string) error {
+	_, err := c.sendCommand(request{Action: "toggle_review", PRKey: key})
 	return err
 }
 

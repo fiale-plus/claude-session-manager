@@ -501,6 +501,20 @@ end tell`, tabIdx, tabIdx)
 			}
 		}
 
+	case "r":
+		// Toggle code review on/off for selected PR.
+		if pr := m.selectedPR(); pr != nil {
+			key := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+			label := "review enabled"
+			if pr.ReviewEnabled {
+				label = "review disabled"
+			}
+			return m, func() tea.Msg {
+				err := m.client.TogglePRReview(key)
+				return actionResultMsg{action: label, err: err}
+			}
+		}
+
 	case "m":
 		// Set merge method for selected PR — daemon handles the actual merge.
 		if pr := m.selectedPR(); pr != nil {

@@ -50,6 +50,9 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 	if pr.Hammer {
 		line1 += " " + lipgloss.NewStyle().Foreground(colorOrange).Bold(true).Render("🔨")
 	}
+	if !pr.ReviewEnabled {
+		line1 += " " + lipgloss.NewStyle().Foreground(colorDimFg).Render("review off")
+	}
 	headerLines = append(headerLines, line1)
 
 	// Line 2: branch → base  +42 -12  3 commits  mergeable

@@ -251,39 +251,6 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 		})
 	}
 
-	// Prepend a compact state-group summary when there are many sessions.
-	// Format: "▶2 ⏸1 ✔5 ●2" — lets user scan state distribution instantly.
-	// Done after PR processing so we can update selectedIdx and sepBoundary cleanly.
-	if len(sessions) >= 5 {
-		counts := map[string]int{}
-		for _, s := range sessions {
-			counts[s.State]++
-		}
-		var parts []string
-		if n := counts["running"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("\u25b6%d", n))
-		}
-		if n := counts["waiting"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("\u23f8%d", n))
-		}
-		if n := counts["idle"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("\u2714%d", n))
-		}
-		if n := counts["dead"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("\u25cf%d", n))
-		}
-		if len(parts) > 0 {
-			summaryStr := lipgloss.NewStyle().Foreground(colorDimFg).Render(strings.Join(parts, " "))
-			summaryPill := pillEntry{rendered: summaryStr, width: lipgloss.Width(summaryStr)}
-			// Prepend: shift all indices by 1.
-			allPills = append([]pillEntry{summaryPill}, allPills...)
-			if selectedIdx >= 0 {
-				selectedIdx++
-			}
-			sepBoundary++ // separator now one position further right
-		}
-	}
-
 	// Fit pills within budget, always including the selected pill.
 	// Strategy: include pills left-to-right until budget exhausted.
 	// If selected pill would be excluded, shift the visible window.
