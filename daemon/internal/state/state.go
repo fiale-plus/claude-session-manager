@@ -271,11 +271,15 @@ func (m *Manager) ShouldAutoApprove(sid string, safety model.ToolSafety) (bool, 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	s, ok := m.sessions[sid]
-	if !ok {
-		return false, false
+	var mode string
+	if s, ok := m.sessions[sid]; ok {
+		mode = s.AutopilotMode
+	} else if persisted, ok := m.autopilot[sid]; ok {
+		// Fallback: session not yet discovered by scanner, but autopilot
+		// state was persisted from a previous run.
+		mode = persisted
 	}
-	switch s.AutopilotMode {
+	switch mode {
 	case model.AutopilotOn:
 		// ON: approve safe+unknown, block destructive.
 		return safety != model.SafetyDestructive, false

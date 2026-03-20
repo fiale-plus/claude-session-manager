@@ -477,6 +477,44 @@ func TestShouldAutoApproveUnknownSession(t *testing.T) {
 	}
 }
 
+func TestShouldAutoApprovePersistedFallback(t *testing.T) {
+	m := newTestManager()
+	// Set persisted autopilot without registering session.
+	m.mu.Lock()
+	m.autopilot["s1"] = model.AutopilotOn
+	m.mu.Unlock()
+
+	// Session not in m.sessions — should fallback to persisted state.
+	approve, grace := m.ShouldAutoApprove("s1", model.SafetySafe)
+	if !approve {
+		t.Error("persisted ON + safe: should approve")
+	}
+	if grace {
+		t.Error("persisted ON + safe: should not grace")
+	}
+
+	// Destructive should be blocked even with persisted ON.
+	approve, grace = m.ShouldAutoApprove("s1", model.SafetyDestructive)
+	if approve {
+		t.Error("persisted ON + destructive: should not approve")
+	}
+}
+
+func TestShouldAutoApprovePersistedYolo(t *testing.T) {
+	m := newTestManager()
+	m.mu.Lock()
+	m.autopilot["s1"] = model.AutopilotYolo
+	m.mu.Unlock()
+
+	approve, grace := m.ShouldAutoApprove("s1", model.SafetyDestructive)
+	if approve {
+		t.Error("persisted YOLO + destructive: should not immediately approve")
+	}
+	if !grace {
+		t.Error("persisted YOLO + destructive: should grace")
+	}
+}
+
 // --- SetSlug / SetGhosttyTab ---
 
 func TestSetSlug(t *testing.T) {

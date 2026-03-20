@@ -51,35 +51,11 @@ func (s *Scanner) Discover() []*model.Session {
 	var sessions []*model.Session
 	seenJSONL := make(map[string]bool)
 
-	// Phase 1: Running processes.
+	// Phase 1: Running processes — each process gets its own session.
 	procs := s.findClaudeProcesses()
-	cwdToPID := make(map[string]procInfo)
-	for _, p := range procs {
-		if existing, ok := cwdToPID[p.cwd]; !ok || p.pid > existing.pid {
-			cwdToPID[p.cwd] = p
-		}
-	}
-
-	for cwd, proc := range cwdToPID {
-		var jsonlPath string
-		// If we have a session ID from --resume, try to match to a specific JSONL file.
-		if proc.sessionID != "" {
-			encoded := encodeProjectPath(cwd)
-			projectDir := filepath.Join(s.claudeProjectsDir, encoded)
-			candidate := filepath.Join(projectDir, proc.sessionID+".jsonl")
-			if _, err := os.Stat(candidate); err == nil {
-				jsonlPath = candidate
-			}
-		}
-		if jsonlPath == "" {
-			encoded := encodeProjectPath(cwd)
-			projectDir := filepath.Join(s.claudeProjectsDir, encoded)
-			jsonlPath = findLatestJSONL(projectDir)
-		}
-		if jsonlPath == "" {
-			continue
-		}
-		if seenJSONL[jsonlPath] {
+	for _, proc := range procs {
+		jsonlPath := s.resolveJSONL(proc)
+		if jsonlPath == "" || seenJSONL[jsonlPath] {
 			continue
 		}
 
@@ -91,7 +67,7 @@ func (s *Scanner) Discover() []*model.Session {
 		seenJSONL[jsonlPath] = true
 	}
 
-	// Phase 2: Dead/historical sessions.
+	// Phase 2: Dead/historical sessions — all recent JSONLs, not just latest.
 	entries, err := os.ReadDir(s.claudeProjectsDir)
 	if err == nil {
 		cutoff := time.Now().Add(-recentThresholdHours * time.Hour)
@@ -100,23 +76,41 @@ func (s *Scanner) Discover() []*model.Session {
 				continue
 			}
 			projectDir := filepath.Join(s.claudeProjectsDir, entry.Name())
-			jsonlPath := findLatestJSONL(projectDir)
-			if jsonlPath == "" || seenJSONL[jsonlPath] {
-				continue
+			for _, jsonlPath := range findRecentJSONLs(projectDir, cutoff) {
+				if seenJSONL[jsonlPath] {
+					continue
+				}
+				session := sessionFromJSONL(jsonlPath, 0, "")
+				if session == nil {
+					continue
+				}
+				sessions = append(sessions, session)
+				seenJSONL[jsonlPath] = true
 			}
-			info, err := os.Stat(jsonlPath)
-			if err != nil || info.ModTime().Before(cutoff) {
-				continue
-			}
-			session := sessionFromJSONL(jsonlPath, 0, "")
-			if session == nil {
-				continue
-			}
-			sessions = append(sessions, session)
 		}
 	}
 
 	return sessions
+}
+
+// resolveJSONL finds the JSONL file for a running process.
+// Resolution order: (1) direct <sessionID>.jsonl, (2) slug-based scan, (3) latest.
+func (s *Scanner) resolveJSONL(proc procInfo) string {
+	encoded := encodeProjectPath(proc.cwd)
+	projectDir := filepath.Join(s.claudeProjectsDir, encoded)
+
+	if proc.sessionID != "" {
+		// Try direct file match (session UUID).
+		candidate := filepath.Join(projectDir, proc.sessionID+".jsonl")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		// Try slug-based scan (--resume uses slug, not UUID).
+		if match := findJSONLBySlug(projectDir, proc.sessionID); match != "" {
+			return match
+		}
+	}
+	return findLatestJSONL(projectDir)
 }
 
 type procInfo struct {
@@ -283,6 +277,44 @@ func decodeProjectPath(encoded string) string {
 	}
 	// Fallback: last segment after the final -.
 	return parts[len(parts)-1]
+}
+
+// findRecentJSONLs returns all JSONL files in dir modified since cutoff.
+func findRecentJSONLs(dir string, cutoff time.Time) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var result []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().Before(cutoff) {
+			continue
+		}
+		result = append(result, filepath.Join(dir, entry.Name()))
+	}
+	return result
+}
+
+// findJSONLBySlug scans recent JSONL files looking for one whose slug or
+// customTitle matches the given slug. Used for --resume <slug> resolution
+// since JSONL filenames are UUIDs, not slugs.
+func findJSONLBySlug(dir, slug string) string {
+	cutoff := time.Now().Add(-recentThresholdHours * time.Hour)
+	for _, path := range findRecentJSONLs(dir, cutoff) {
+		entries, err := ReadTail(path, 50)
+		if err != nil {
+			continue
+		}
+		_, fileSlug, _, _, customTitle := ExtractMetadata(entries)
+		if customTitle == slug || fileSlug == slug {
+			return path
+		}
+	}
+	return ""
 }
 
 func findLatestJSONL(dir string) string {
