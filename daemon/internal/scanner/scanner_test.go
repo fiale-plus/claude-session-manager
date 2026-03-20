@@ -532,3 +532,81 @@ type mockUpdater struct {
 func (m *mockUpdater) UpdateSessionFromScanner(s *model.Session) {
 	m.count++
 }
+
+// --- findRecentJSONLs ---
+
+func TestFindRecentJSONLs_ReturnsAll(t *testing.T) {
+	dir := t.TempDir()
+	cutoff := time.Now().Add(-1 * time.Hour)
+
+	// Create 3 JSONL files — all recent.
+	for _, name := range []string{"a.jsonl", "b.jsonl", "c.jsonl"} {
+		_ = os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o644)
+	}
+	// Create 1 old file.
+	oldPath := filepath.Join(dir, "old.jsonl")
+	_ = os.WriteFile(oldPath, []byte("{}"), 0o644)
+	_ = os.Chtimes(oldPath, cutoff.Add(-2*time.Hour), cutoff.Add(-2*time.Hour))
+
+	got := findRecentJSONLs(dir, cutoff)
+	if len(got) != 3 {
+		t.Errorf("expected 3 recent files, got %d", len(got))
+	}
+}
+
+func TestFindRecentJSONLs_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	got := findRecentJSONLs(dir, time.Now().Add(-time.Hour))
+	if len(got) != 0 {
+		t.Errorf("expected 0 files, got %d", len(got))
+	}
+}
+
+func TestFindRecentJSONLs_NonexistentDir(t *testing.T) {
+	got := findRecentJSONLs("/nonexistent/dir", time.Now())
+	if got != nil {
+		t.Errorf("expected nil, got %v", got)
+	}
+}
+
+// --- findJSONLBySlug ---
+
+func TestFindJSONLBySlug_MatchesCustomTitle(t *testing.T) {
+	dir := t.TempDir()
+	// File with a custom-title matching the slug.
+	content := `{"type":"system","subtype":"init","sessionId":"uuid-123","slug":"auto-slug"}
+{"type":"custom-title","customTitle":"my-session"}
+`
+	path := filepath.Join(dir, "uuid-123.jsonl")
+	_ = os.WriteFile(path, []byte(content), 0o644)
+
+	got := findJSONLBySlug(dir, "my-session")
+	if got != path {
+		t.Errorf("expected %q, got %q", path, got)
+	}
+}
+
+func TestFindJSONLBySlug_MatchesSlug(t *testing.T) {
+	dir := t.TempDir()
+	content := `{"type":"system","subtype":"init","sessionId":"uuid-456","slug":"my-slug"}
+`
+	path := filepath.Join(dir, "uuid-456.jsonl")
+	_ = os.WriteFile(path, []byte(content), 0o644)
+
+	got := findJSONLBySlug(dir, "my-slug")
+	if got != path {
+		t.Errorf("expected %q, got %q", path, got)
+	}
+}
+
+func TestFindJSONLBySlug_NoMatch(t *testing.T) {
+	dir := t.TempDir()
+	content := `{"type":"system","subtype":"init","sessionId":"uuid-789","slug":"other-slug"}
+`
+	_ = os.WriteFile(filepath.Join(dir, "uuid-789.jsonl"), []byte(content), 0o644)
+
+	got := findJSONLBySlug(dir, "nonexistent")
+	if got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
