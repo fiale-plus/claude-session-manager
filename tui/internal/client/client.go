@@ -111,20 +111,22 @@ type PREvent struct {
 
 // serverEvent is the shape of NDJSON messages from the daemon.
 type serverEvent struct {
-	Event    string      `json:"event,omitempty"`
-	Sessions []Session   `json:"sessions,omitempty"`
-	PRs      []TrackedPR `json:"prs,omitempty"`
-	OK       *bool       `json:"ok,omitempty"`
-	NewRepo  bool        `json:"new_repo,omitempty"`
+	Event            string      `json:"event,omitempty"`
+	Sessions         []Session   `json:"sessions,omitempty"`
+	PRs              []TrackedPR `json:"prs,omitempty"`
+	OK               *bool       `json:"ok,omitempty"`
+	NewRepo          bool        `json:"new_repo,omitempty"`
+	DefaultAutopilot string      `json:"default_autopilot,omitempty"`
 }
 
 // request is the shape of NDJSON messages sent to the daemon.
 type request struct {
-	Action      string `json:"action"`
-	SessionID   string `json:"session_id,omitempty"`
-	PRURL       string `json:"pr_url,omitempty"`
-	PRKey       string `json:"pr_key,omitempty"`
-	MergeMethod string `json:"merge_method,omitempty"`
+	Action           string `json:"action"`
+	SessionID        string `json:"session_id,omitempty"`
+	PRURL            string `json:"pr_url,omitempty"`
+	PRKey            string `json:"pr_key,omitempty"`
+	MergeMethod      string `json:"merge_method,omitempty"`
+	DefaultAutopilot string `json:"default_autopilot,omitempty"`
 }
 
 // Client manages the connection to the CSM daemon.
@@ -140,10 +142,11 @@ func New(socketPath string) *Client {
 	return &Client{socketPath: socketPath}
 }
 
-// StateUpdate carries both sessions and PRs from a subscribe event.
+// StateUpdate carries sessions, PRs, and global config from a subscribe event.
 type StateUpdate struct {
-	Sessions []Session
-	PRs      []TrackedPR
+	Sessions         []Session
+	PRs              []TrackedPR
+	DefaultAutopilot string
 }
 
 // Subscribe connects to the daemon and streams state updates.
@@ -177,7 +180,7 @@ func (c *Client) Subscribe() (<-chan StateUpdate, error) {
 				continue
 			}
 			if ev.Event == "state_updated" || ev.Event == "sessions_updated" {
-				ch <- StateUpdate{Sessions: ev.Sessions, PRs: ev.PRs}
+				ch <- StateUpdate{Sessions: ev.Sessions, PRs: ev.PRs, DefaultAutopilot: ev.DefaultAutopilot}
 			}
 		}
 	}()
@@ -276,6 +279,23 @@ func (c *Client) CyclePRAutopilot(key string) error {
 func (c *Client) TogglePRReview(key string) error {
 	_, err := c.sendCommand(request{Action: "toggle_review", PRKey: key})
 	return err
+}
+
+// SetDefaultAutopilot sets the daemon-wide default autopilot mode.
+// Valid values: "" (none/off), "on", "yolo".
+func (c *Client) SetDefaultAutopilot(mode string) error {
+	_, err := c.sendCommand(request{Action: "set_default_autopilot", DefaultAutopilot: mode})
+	return err
+}
+
+// GetConfig returns the current daemon configuration. Currently returns the
+// default autopilot mode string.
+func (c *Client) GetConfig() (string, error) {
+	resp, err := c.sendCommand(request{Action: "get_config"})
+	if err != nil {
+		return "", err
+	}
+	return resp.DefaultAutopilot, nil
 }
 
 // Focus focuses the Ghostty tab for the given session.
