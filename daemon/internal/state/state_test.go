@@ -858,3 +858,114 @@ func TestResolvePendingClearsPendingTools(t *testing.T) {
 		t.Error("HasDestructive should be false after resolve")
 	}
 }
+
+// --- Default autopilot ---
+
+// newTestManagerWithDefault creates a Manager without disk persistence but
+// with a pre-configured default autopilot mode.
+func newTestManagerWithDefault(defaultMode string) *Manager {
+	return &Manager{
+		sessions:  make(map[string]*model.Session),
+		autopilot: make(map[string]string),
+		pending:   make(map[string]*model.PendingApproval),
+		cooldowns: make(map[string]time.Time),
+		config:    Config{DefaultAutopilot: defaultMode},
+	}
+}
+
+// TestDefaultAutopilotAppliedOnRegister verifies that new sessions receive the
+// default autopilot mode when no per-session override exists.
+func TestDefaultAutopilotAppliedOnRegister(t *testing.T) {
+	m := newTestManagerWithDefault(model.AutopilotYolo)
+	m.RegisterSession("s1", "/path", "default")
+
+	sessions := m.GetSessions()
+	if sessions[0].AutopilotMode != model.AutopilotYolo {
+		t.Errorf("autopilot = %q, want yolo (default)", sessions[0].AutopilotMode)
+	}
+}
+
+// TestPersistedAutopilotOverridesDefault verifies that a persisted per-session
+// mode takes priority over the daemon-wide default.
+func TestPersistedAutopilotOverridesDefault(t *testing.T) {
+	m := newTestManagerWithDefault(model.AutopilotYolo)
+	m.autopilot["s1"] = model.AutopilotOn // persisted override
+	m.RegisterSession("s1", "/path", "default")
+
+	sessions := m.GetSessions()
+	if sessions[0].AutopilotMode != model.AutopilotOn {
+		t.Errorf("autopilot = %q, want on (persisted should override default yolo)", sessions[0].AutopilotMode)
+	}
+}
+
+// TestSetDefaultAutopilotPersistsToDisk verifies that SetDefaultAutopilot
+// writes to disk and is readable by a new manager loaded from the same dir.
+func TestSetDefaultAutopilotPersistsToDisk(t *testing.T) {
+	dir := t.TempDir()
+	m := NewWithDir(dir)
+	m.SetDefaultAutopilot(model.AutopilotYolo)
+
+	// New manager from same dir should load the persisted default.
+	m2 := NewWithDir(dir)
+	if got := m2.GetDefaultAutopilot(); got != model.AutopilotYolo {
+		t.Errorf("GetDefaultAutopilot = %q, want yolo", got)
+	}
+}
+
+// TestDefaultAutopilotAppliedOnScanner verifies that scanner-discovered
+// sessions also receive the default autopilot mode.
+func TestDefaultAutopilotAppliedOnScanner(t *testing.T) {
+	m := newTestManagerWithDefault(model.AutopilotOn)
+	s := &model.Session{SessionID: "scan-1", CWD: "/path", State: model.StateRunning, PID: 1}
+	m.UpdateSessionFromScanner(s)
+
+	sessions := m.GetSessions()
+	if sessions[0].AutopilotMode != model.AutopilotOn {
+		t.Errorf("scanner session autopilot = %q, want on (default)", sessions[0].AutopilotMode)
+	}
+}
+
+// TestDefaultNotAppliedWhenSessionAlreadyRegistered verifies that when a
+// session is first registered via hook (getting the default), a subsequent
+// scanner update does not clobber the mode.
+func TestDefaultNotAppliedWhenSessionAlreadyRegistered(t *testing.T) {
+	m := newTestManagerWithDefault(model.AutopilotOn)
+	// Hook registers the session; default is applied.
+	m.RegisterSession("s1", "/path", "default")
+
+	// User later cycles to yolo.
+	m.CycleAutopilot("s1") // on → yolo (since default applied "on" first)
+	// Actually start from registered state: default=on → cycle → yolo.
+	sessions := m.GetSessions()
+	if sessions[0].AutopilotMode != model.AutopilotYolo {
+		t.Fatalf("after cycle: want yolo, got %q", sessions[0].AutopilotMode)
+	}
+
+	// Now scanner update comes in for the existing session — should NOT reset mode.
+	s := &model.Session{SessionID: "s1", CWD: "/scanner/path", State: model.StateRunning, PID: 999}
+	m.UpdateSessionFromScanner(s)
+
+	sessions = m.GetSessions()
+	if sessions[0].AutopilotMode != model.AutopilotYolo {
+		t.Errorf("scanner update clobbered autopilot: got %q, want yolo", sessions[0].AutopilotMode)
+	}
+}
+
+// TestGetSetDefaultAutopilot verifies the get/set round-trip in-memory.
+func TestGetSetDefaultAutopilot(t *testing.T) {
+	m := newTestManager()
+
+	if got := m.GetDefaultAutopilot(); got != "" {
+		t.Errorf("initial default = %q, want empty", got)
+	}
+
+	m.SetDefaultAutopilot(model.AutopilotOn)
+	if got := m.GetDefaultAutopilot(); got != model.AutopilotOn {
+		t.Errorf("after set: default = %q, want on", got)
+	}
+
+	m.SetDefaultAutopilot("")
+	if got := m.GetDefaultAutopilot(); got != "" {
+		t.Errorf("after clear: default = %q, want empty", got)
+	}
+}
