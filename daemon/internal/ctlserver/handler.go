@@ -15,20 +15,22 @@ import (
 )
 
 type ctlRequest struct {
-	Action      string `json:"action"`
-	SessionID   string `json:"session_id,omitempty"`
-	PRURL       string `json:"pr_url,omitempty"`       // for add_pr
-	PRKey       string `json:"pr_key,omitempty"`       // "owner/repo#N" for remove_pr, cycle_pr_autopilot, set_merge_method
-	MergeMethod string `json:"merge_method,omitempty"` // for set_merge_method
+	Action           string `json:"action"`
+	SessionID        string `json:"session_id,omitempty"`
+	PRURL            string `json:"pr_url,omitempty"`            // for add_pr
+	PRKey            string `json:"pr_key,omitempty"`            // "owner/repo#N" for remove_pr, cycle_pr_autopilot, set_merge_method
+	MergeMethod      string `json:"merge_method,omitempty"`      // for set_merge_method
+	DefaultAutopilot string `json:"default_autopilot,omitempty"` // for set_default_autopilot
 }
 
 type ctlResponse struct {
-	OK            *bool           `json:"ok,omitempty"`
-	Sessions      []model.Session `json:"sessions,omitempty"`
-	PRs           []pr.TrackedPR  `json:"prs,omitempty"`
-	Event         string          `json:"event,omitempty"`
-	AutopilotMode string          `json:"autopilot_mode,omitempty"`
-	NewRepo       bool            `json:"new_repo,omitempty"` // true when add_pr is the first PR for this repo
+	OK               *bool           `json:"ok,omitempty"`
+	Sessions         []model.Session `json:"sessions,omitempty"`
+	PRs              []pr.TrackedPR  `json:"prs,omitempty"`
+	Event            string          `json:"event,omitempty"`
+	AutopilotMode    string          `json:"autopilot_mode,omitempty"`
+	NewRepo          bool            `json:"new_repo,omitempty"` // true when add_pr is the first PR for this repo
+	DefaultAutopilot string          `json:"default_autopilot,omitempty"`
 }
 
 type Handler struct {
@@ -76,6 +78,10 @@ func (h *Handler) Handle(conn net.Conn) {
 			h.handleSetMergeMethod(conn, req.PRKey, req.MergeMethod)
 		case "toggle_review":
 			h.handleToggleReview(conn, req.PRKey)
+		case "set_default_autopilot":
+			h.handleSetDefaultAutopilot(conn, req.DefaultAutopilot)
+		case "get_config":
+			h.handleGetConfig(conn)
 		}
 	}
 }
@@ -272,6 +278,18 @@ func (h *Handler) handleToggleReview(conn net.Conn, key string) {
 	fmt.Sscanf(parts[1], "%d", &number)
 	ok := h.prPoll.ToggleReview(ownerRepo[0], ownerRepo[1], number)
 	writeJSON(conn, ctlResponse{OK: &ok})
+}
+
+func (h *Handler) handleSetDefaultAutopilot(conn net.Conn, mode string) {
+	h.state.SetDefaultAutopilot(mode)
+	ok := true
+	writeJSON(conn, ctlResponse{OK: &ok, DefaultAutopilot: mode})
+}
+
+func (h *Handler) handleGetConfig(conn net.Conn) {
+	mode := h.state.GetDefaultAutopilot()
+	ok := true
+	writeJSON(conn, ctlResponse{OK: &ok, DefaultAutopilot: mode})
 }
 
 func writeJSON(conn net.Conn, v any) {
