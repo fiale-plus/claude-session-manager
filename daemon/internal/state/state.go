@@ -110,9 +110,12 @@ func (m *Manager) RegisterSession(sid, cwd, permMode string) {
 	s.PermissionMode = permMode
 	s.ProjectName = filepath.Base(cwd)
 
-	// Restore persisted autopilot state.
+	// Restore persisted autopilot state; fall back to config default for new sessions.
 	if mode, ok := m.autopilot[sid]; ok && mode != "" {
 		s.AutopilotMode = mode
+	} else if !exists && m.config.DefaultAutopilot != "" {
+		s.AutopilotMode = m.config.DefaultAutopilot
+		log.Printf("state: applied default autopilot %s to session %s", m.config.DefaultAutopilot, sid)
 	}
 
 	m.notifySubscribers()
