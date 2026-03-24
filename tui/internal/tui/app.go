@@ -68,7 +68,11 @@ type Model struct {
 	mergePickerVisible bool              // merge method picker showing
 	mergePickerPR      *client.TrackedPR // PR being configured (for display)
 	mergePickerPRKey   string            // "owner/repo#N" — used for SetMergeMethod
-	scrollOffset int // scroll position in zoom body
+	scrollOffset       int               // scroll position in zoom body
+	// defaultAutopilot is the global default autopilot mode for new sessions.
+	// Values: "" (off), "on" (AUTO), "yolo" (YOLO).
+	// TODO: wire to StateUpdate.DefaultAutopilot once Agent B's changes are merged.
+	defaultAutopilot string
 }
 
 // NewModel creates a new TUI model.
