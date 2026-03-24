@@ -31,6 +31,7 @@ func renderHints(queueVisible bool, hasPending bool, isPRSelected bool, width in
 		// Session-specific hints.
 		keys = append(keys, hint{"Enter", "focus"})
 		keys = append(keys, hint{"a", "autopilot"})
+		keys = append(keys, hint{"d", "default"})
 		if hasPending {
 			keys = append(keys, hint{"y", "approve"}, hint{"n", "reject"})
 		}
