@@ -772,12 +772,12 @@ func (m Model) View() string {
 		if sel := m.selected(); sel != nil {
 			mainContent = renderZoom(*sel, w, remainingHeight, m.scrollOffset, m.defaultAutopilot)
 		} else {
-			mainContent = renderEmptyState(w, remainingHeight)
+			mainContent = renderEmptyState(w, remainingHeight, m.defaultAutopilot)
 		}
 	} else if selPR := m.selectedPR(); selPR != nil {
 		mainContent = renderPRZoom(*selPR, w, remainingHeight, m.scrollOffset)
 	} else {
-		mainContent = renderEmptyState(w, remainingHeight)
+		mainContent = renderEmptyState(w, remainingHeight, m.defaultAutopilot)
 	}
 
 	var outputParts []string
@@ -973,7 +973,8 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 }
 
 // renderEmptyState renders a centered empty state when no sessions exist.
-func renderEmptyState(width, height int) string {
+// defaultAutopilot is used to conditionally show a first-run discoverability tip.
+func renderEmptyState(width, height int, defaultAutopilot string) string {
 	art := lipgloss.NewStyle().
 		Foreground(colorAccent).
 		Bold(true).
@@ -993,14 +994,19 @@ func renderEmptyState(width, height int) string {
 		Foreground(colorSubtle).
 		Render("Start a Claude Code session to see it here")
 
-	block := lipgloss.JoinVertical(lipgloss.Center,
-		art,
-		"",
-		title,
-		subtitle,
-		"",
-		hint,
-	)
+	var blockParts []string
+	blockParts = append(blockParts, art, "", title, subtitle, "", hint)
+
+	// First-run tip: only when no default is set, gently suggest 'd'.
+	if defaultAutopilot == "" {
+		tip := lipgloss.NewStyle().
+			Foreground(colorSubtle).
+			Italic(true).
+			Render("Tip: Press 'd' to set a default autopilot mode for all new sessions")
+		blockParts = append(blockParts, "", tip)
+	}
+
+	block := lipgloss.JoinVertical(lipgloss.Center, blockParts...)
 
 	return lipgloss.NewStyle().
 		Height(height).
