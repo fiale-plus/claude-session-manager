@@ -44,6 +44,11 @@ type Manager struct {
 	subMu       sync.Mutex
 
 	autopilotPath string
+
+	// config holds daemon-wide settings (e.g., default autopilot mode).
+	config Config
+	// configFilePath is the path to ~/.csm/config.json (empty = no persistence).
+	configFilePath string
 }
 
 // New creates a new state Manager, loading persisted autopilot state.
@@ -61,6 +66,8 @@ func New() *Manager {
 		_ = os.MkdirAll(dir, 0o755)
 		m.autopilotPath = filepath.Join(dir, "autopilot.json")
 		m.loadAutopilot()
+		m.configFilePath = filepath.Join(dir, "config.json")
+		m.config = loadConfig(m.configFilePath)
 	}
 
 	return m
@@ -79,6 +86,8 @@ func NewWithDir(dir string) *Manager {
 		_ = os.MkdirAll(dir, 0o755)
 		m.autopilotPath = filepath.Join(dir, "autopilot.json")
 		m.loadAutopilot()
+		m.configFilePath = filepath.Join(dir, "config.json")
+		m.config = loadConfig(m.configFilePath)
 	}
 	return m
 }
@@ -466,4 +475,25 @@ func (m *Manager) saveAutopilot() {
 	if err := os.WriteFile(m.autopilotPath, data, 0o644); err != nil {
 		log.Printf("failed to save autopilot state: %v", err)
 	}
+}
+
+// GetDefaultAutopilot returns the daemon-wide default autopilot mode.
+// Empty string means no default (sessions start with autopilot off).
+func (m *Manager) GetDefaultAutopilot() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.DefaultAutopilot
+}
+
+// SetDefaultAutopilot updates the daemon-wide default autopilot mode and
+// persists it to ~/.csm/config.json. Valid values: "" (none), "on", "yolo".
+func (m *Manager) SetDefaultAutopilot(mode string) {
+	m.mu.Lock()
+	m.config.DefaultAutopilot = mode
+	cfgPath := m.configFilePath
+	cfg := m.config
+	m.mu.Unlock()
+
+	saveConfig(cfgPath, cfg)
+	log.Printf("state: default autopilot set to %q", mode)
 }
