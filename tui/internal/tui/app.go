@@ -758,7 +758,7 @@ func (m Model) View() string {
 				failingPRs++
 			}
 		}
-		statusLine = renderStatusBar(m.connected, m.sessions, m.prs, failingPRs, m.flash, m.flashStyle, w)
+		statusLine = renderStatusBar(m.connected, m.sessions, m.prs, failingPRs, m.flash, m.flashStyle, m.defaultAutopilot, w)
 	}
 	statusHeight := lipgloss.Height(statusLine)
 
@@ -795,7 +795,7 @@ func (m Model) View() string {
 }
 
 // renderStatusBar renders the top status bar with branding, connection info, and flash.
-func renderStatusBar(connected bool, sessions []client.Session, prs []client.TrackedPR, failingPRs int, flash string, flashStyle lipgloss.Style, width int) string {
+func renderStatusBar(connected bool, sessions []client.Session, prs []client.TrackedPR, failingPRs int, flash string, flashStyle lipgloss.Style, defaultAutopilot string, width int) string {
 	logo := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorAccent).
@@ -939,7 +939,16 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 		}
 	}
 
-	left := logo + "  " + connStatus + "  " + sessionCount + prCount + prBreakdownStr + stateBreakdownStr + pendingStr + failingStr
+	// Default autopilot indicator — shown only when a default is set.
+	defaultAutopilotStr := ""
+	switch defaultAutopilot {
+	case "on":
+		defaultAutopilotStr = "  " + styleAutopilotOn.Render("\u2699 default: AUTO")
+	case "yolo":
+		defaultAutopilotStr = "  " + styleAutopilotWarn.Render("\u26a0 default: YOLO")
+	}
+
+	left := logo + "  " + connStatus + "  " + sessionCount + prCount + prBreakdownStr + stateBreakdownStr + defaultAutopilotStr + pendingStr + failingStr
 
 	// Flash message (action feedback).
 	if flash != "" {
