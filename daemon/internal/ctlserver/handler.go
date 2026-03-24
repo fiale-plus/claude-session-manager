@@ -108,8 +108,9 @@ func (h *Handler) handleSubscribe(conn net.Conn) {
 
 func (h *Handler) stateSnapshot() ctlResponse {
 	resp := ctlResponse{
-		Event:    "state_updated",
-		Sessions: h.state.GetSessions(),
+		Event:            "state_updated",
+		Sessions:         h.state.GetSessions(),
+		DefaultAutopilot: h.state.GetDefaultAutopilot(),
 	}
 	if h.prPoll != nil {
 		resp.PRs = h.prPoll.GetAll()
