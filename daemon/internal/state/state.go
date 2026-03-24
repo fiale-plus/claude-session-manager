@@ -135,6 +135,20 @@ func (m *Manager) UnregisterSession(sid string) {
 	m.notifySubscribers()
 }
 
+// applyDefaultAutopilot sets the session's AutopilotMode to the configured
+// default when the session has no persisted per-session mode. Caller must
+// hold m.mu (write lock).
+func (m *Manager) applyDefaultAutopilot(s *model.Session) {
+	if _, hasPersisted := m.autopilot[s.SessionID]; hasPersisted {
+		// Per-session persisted state already handled separately; skip.
+		return
+	}
+	if s.AutopilotMode == "" && m.config.DefaultAutopilot != "" {
+		s.AutopilotMode = m.config.DefaultAutopilot
+		log.Printf("state: applied default autopilot %s to session %s", m.config.DefaultAutopilot, s.SessionID)
+	}
+}
+
 // UpdateSessionFromScanner merges scanner-discovered session data.
 func (m *Manager) UpdateSessionFromScanner(s *model.Session) {
 	m.mu.Lock()
@@ -142,9 +156,11 @@ func (m *Manager) UpdateSessionFromScanner(s *model.Session) {
 
 	existing, ok := m.sessions[s.SessionID]
 	if !ok {
-		// New session from scanner.
+		// New session from scanner — restore persisted mode or apply default.
 		if mode, okAP := m.autopilot[s.SessionID]; okAP && mode != "" {
 			s.AutopilotMode = mode
+		} else {
+			m.applyDefaultAutopilot(s)
 		}
 		m.sessions[s.SessionID] = s
 		m.notifySubscribers()
