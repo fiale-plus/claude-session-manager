@@ -583,11 +583,11 @@ end tell`, tabIdx, tabIdx)
 		case "":
 			m.defaultAutopilot = "on"
 			m.flash = "\u2699 default autopilot: AUTO"
-			m.flashStyle = styleAutopilotOn
+			m.flashStyle = lipgloss.NewStyle().Bold(true).Foreground(colorRunning)
 		case "on":
 			m.defaultAutopilot = "yolo"
 			m.flash = "\u26a0 default autopilot: YOLO"
-			m.flashStyle = styleAutopilotWarn
+			m.flashStyle = lipgloss.NewStyle().Bold(true).Foreground(colorOrange)
 		default:
 			m.defaultAutopilot = ""
 			m.flash = "\u2022 default autopilot: OFF"
