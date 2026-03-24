@@ -44,7 +44,7 @@ func TestRenderZoom_NeverExceedsHeight(t *testing.T) {
 		{"very narrow wraps lines", 25, 15},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			out := renderZoom(s, tt.width, tt.height, 0)
+			out := renderZoom(s, tt.width, tt.height, 0, "")
 			lines := strings.Split(out, "\n")
 			if len(lines) > tt.height {
 				t.Errorf("renderZoom produced %d lines, want <= %d", len(lines), tt.height)
@@ -63,7 +63,7 @@ func TestRenderZoom_LongContent_ClipsCleanly(t *testing.T) {
 	s.AutopilotMode = "yolo"
 
 	width, height := 80, 15
-	out := renderZoom(s, width, height, 0)
+	out := renderZoom(s, width, height, 0, "")
 	lines := strings.Split(out, "\n")
 	if len(lines) > height {
 		t.Errorf("renderZoom with long content produced %d lines, want <= %d", len(lines), height)
@@ -79,7 +79,7 @@ func TestRenderZoom_WithPendingTools(t *testing.T) {
 	}
 
 	width, height := 80, 12
-	out := renderZoom(s, width, height, 0)
+	out := renderZoom(s, width, height, 0, "")
 	lines := strings.Split(out, "\n")
 	if len(lines) > height {
 		t.Errorf("renderZoom with pending tools produced %d lines, want <= %d", len(lines), height)
@@ -126,7 +126,7 @@ func TestRenderZoom_ManyActivities_ShowsOverflow(t *testing.T) {
 		})
 	}
 
-	out := renderZoom(s, 100, 30, 0)
+	out := renderZoom(s, 100, 30, 0, "")
 	// Should indicate there are older activities not shown.
 	if !strings.Contains(out, "+") || !strings.Contains(out, "more") {
 		t.Error("15 activities should show overflow indicator like '+7 more'")
@@ -138,7 +138,7 @@ func TestRenderZoom_ManyActivities_ShowsOverflow(t *testing.T) {
 func TestRenderZoom_MinimumHeight(t *testing.T) {
 	s := testSession()
 	// Height=4 is the minimum — should not panic or produce empty output.
-	out := renderZoom(s, 80, 4, 0)
+	out := renderZoom(s, 80, 4, 0, "")
 	if out == "" {
 		t.Error("renderZoom at height=4 should produce output")
 	}
@@ -153,7 +153,7 @@ func TestRenderZoom_MinimumHeight(t *testing.T) {
 func TestRenderZoom_ScrollClamp(t *testing.T) {
 	s := testSession()
 	// Scroll offset way beyond content should not panic.
-	out := renderZoom(s, 80, 20, 9999)
+	out := renderZoom(s, 80, 20, 9999, "")
 	if out == "" {
 		t.Error("renderZoom with huge scroll offset should produce output")
 	}
@@ -164,7 +164,7 @@ func TestRenderZoom_ScrollClamp(t *testing.T) {
 func TestRenderZoom_ShowsPermissionMode(t *testing.T) {
 	s := testSession()
 	s.PermissionMode = "plan"
-	out := renderZoom(s, 100, 20, 0)
+	out := renderZoom(s, 100, 20, 0, "")
 	if !strings.Contains(out, "PLAN") {
 		t.Error("session with permission_mode=plan should show PLAN badge")
 	}
@@ -261,7 +261,7 @@ func TestRenderZoom_EmptySession(t *testing.T) {
 		SessionID: "empty",
 		State:     "idle",
 	}
-	out := renderZoom(s, 80, 20, 0)
+	out := renderZoom(s, 80, 20, 0, "")
 	if out == "" {
 		t.Error("empty session should still render")
 	}
@@ -277,7 +277,7 @@ func TestRenderZoom_NilLastActivity(t *testing.T) {
 		PID:          123,
 		LastActivity: nil,
 	}
-	out := renderZoom(s, 80, 20, 0)
+	out := renderZoom(s, 80, 20, 0, "")
 	if out == "" {
 		t.Error("nil LastActivity should still render")
 	}
@@ -289,7 +289,7 @@ func TestRenderZoom_AutopilotModes(t *testing.T) {
 	for _, mode := range []string{"off", "on", "yolo", ""} {
 		s := testSession()
 		s.AutopilotMode = mode
-		out := renderZoom(s, 100, 20, 0)
+		out := renderZoom(s, 100, 20, 0, "")
 		if out == "" {
 			t.Errorf("autopilot=%q: should produce output", mode)
 		}
@@ -312,7 +312,7 @@ func TestRenderZoom_StripsXMLFromActivities(t *testing.T) {
 		LastActivity: &now,
 	}
 
-	out := renderZoom(s, 100, 20, 0)
+	out := renderZoom(s, 100, 20, 0, "")
 	// The CC internal message should be filtered out entirely.
 	if strings.Contains(out, "<task-") {
 		t.Error("zoom should filter CC internal markup from activities")
@@ -334,7 +334,7 @@ func TestRenderZoom_StripsMarkdownFromLastText(t *testing.T) {
 		LastActivity: &now,
 	}
 
-	out := renderZoom(s, 100, 20, 0)
+	out := renderZoom(s, 100, 20, 0, "")
 	if strings.Contains(out, "**") {
 		t.Error("zoom should strip markdown ** from LastText")
 	}
@@ -355,7 +355,7 @@ func TestRenderZoom_StripsXMLFromLastText(t *testing.T) {
 		LastActivity: &now,
 	}
 
-	out := renderZoom(s, 100, 20, 0)
+	out := renderZoom(s, 100, 20, 0, "")
 	if strings.Contains(out, "<b>") {
 		t.Error("zoom should strip XML tags from LastText")
 	}

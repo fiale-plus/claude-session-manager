@@ -68,7 +68,10 @@ type Model struct {
 	mergePickerVisible bool              // merge method picker showing
 	mergePickerPR      *client.TrackedPR // PR being configured (for display)
 	mergePickerPRKey   string            // "owner/repo#N" — used for SetMergeMethod
-	scrollOffset int // scroll position in zoom body
+	scrollOffset       int               // scroll position in zoom body
+	// defaultAutopilot is the global default autopilot mode for new sessions.
+	// Values: "" (off), "on" (AUTO), "yolo" (YOLO).
+	defaultAutopilot string
 }
 
 // NewModel creates a new TUI model.
@@ -183,6 +186,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateMsg:
 		m.sessions = msg.Sessions
 		m.prs = msg.PRs
+		m.defaultAutopilot = msg.DefaultAutopilot
 		// Restore selection by ID to prevent jumping.
 		totalItems := len(m.sessions) + len(m.prs)
 		found := false
@@ -576,6 +580,28 @@ end tell`, tabIdx, tabIdx)
 			}
 		}
 
+	case "d":
+		// Cycle default autopilot mode for new sessions: "" → "on" → "yolo" → "".
+		switch m.defaultAutopilot {
+		case "":
+			m.defaultAutopilot = "on"
+			m.flash = "\u2699 default autopilot: AUTO"
+			m.flashStyle = lipgloss.NewStyle().Bold(true).Foreground(colorRunning)
+		case "on":
+			m.defaultAutopilot = "yolo"
+			m.flash = "\u26a0 default autopilot: YOLO"
+			m.flashStyle = lipgloss.NewStyle().Bold(true).Foreground(colorOrange)
+		default:
+			m.defaultAutopilot = ""
+			m.flash = "\u2022 default autopilot: OFF"
+			m.flashStyle = lipgloss.NewStyle().Foreground(colorDimFg)
+		}
+		mode := m.defaultAutopilot
+		return m, tea.Batch(clearFlashAfter(2*time.Second), func() tea.Msg {
+			err := m.client.SetDefaultAutopilot(mode)
+			return actionResultMsg{action: "set default autopilot", err: err}
+		})
+
 	case "esc":
 		if m.mergePickerVisible {
 			m.mergePickerVisible = false
@@ -739,7 +765,7 @@ func (m Model) View() string {
 				failingPRs++
 			}
 		}
-		statusLine = renderStatusBar(m.connected, m.sessions, m.prs, failingPRs, m.flash, m.flashStyle, w)
+		statusLine = renderStatusBar(m.connected, m.sessions, m.prs, failingPRs, m.flash, m.flashStyle, m.defaultAutopilot, w)
 	}
 	statusHeight := lipgloss.Height(statusLine)
 
@@ -751,14 +777,14 @@ func (m Model) View() string {
 		mainContent = renderQueue(m.sessions, w, remainingHeight)
 	} else if isSession {
 		if sel := m.selected(); sel != nil {
-			mainContent = renderZoom(*sel, w, remainingHeight, m.scrollOffset)
+			mainContent = renderZoom(*sel, w, remainingHeight, m.scrollOffset, m.defaultAutopilot)
 		} else {
-			mainContent = renderEmptyState(w, remainingHeight)
+			mainContent = renderEmptyState(w, remainingHeight, m.defaultAutopilot)
 		}
 	} else if selPR := m.selectedPR(); selPR != nil {
 		mainContent = renderPRZoom(*selPR, w, remainingHeight, m.scrollOffset)
 	} else {
-		mainContent = renderEmptyState(w, remainingHeight)
+		mainContent = renderEmptyState(w, remainingHeight, m.defaultAutopilot)
 	}
 
 	var outputParts []string
@@ -776,7 +802,7 @@ func (m Model) View() string {
 }
 
 // renderStatusBar renders the top status bar with branding, connection info, and flash.
-func renderStatusBar(connected bool, sessions []client.Session, prs []client.TrackedPR, failingPRs int, flash string, flashStyle lipgloss.Style, width int) string {
+func renderStatusBar(connected bool, sessions []client.Session, prs []client.TrackedPR, failingPRs int, flash string, flashStyle lipgloss.Style, defaultAutopilot string, width int) string {
 	logo := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorAccent).
@@ -920,7 +946,16 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 		}
 	}
 
-	left := logo + "  " + connStatus + "  " + sessionCount + prCount + prBreakdownStr + stateBreakdownStr + pendingStr + failingStr
+	// Default autopilot indicator — shown only when a default is set.
+	defaultAutopilotStr := ""
+	switch defaultAutopilot {
+	case "on":
+		defaultAutopilotStr = "  " + styleAutopilotOn.Render("\u2699 default: AUTO")
+	case "yolo":
+		defaultAutopilotStr = "  " + styleAutopilotWarn.Render("\u26a0 default: YOLO")
+	}
+
+	left := logo + "  " + connStatus + "  " + sessionCount + prCount + prBreakdownStr + stateBreakdownStr + defaultAutopilotStr + pendingStr + failingStr
 
 	// Flash message (action feedback).
 	if flash != "" {
@@ -945,7 +980,8 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 }
 
 // renderEmptyState renders a centered empty state when no sessions exist.
-func renderEmptyState(width, height int) string {
+// defaultAutopilot is used to conditionally show a first-run discoverability tip.
+func renderEmptyState(width, height int, defaultAutopilot string) string {
 	art := lipgloss.NewStyle().
 		Foreground(colorAccent).
 		Bold(true).
@@ -965,14 +1001,19 @@ func renderEmptyState(width, height int) string {
 		Foreground(colorSubtle).
 		Render("Start a Claude Code session to see it here")
 
-	block := lipgloss.JoinVertical(lipgloss.Center,
-		art,
-		"",
-		title,
-		subtitle,
-		"",
-		hint,
-	)
+	var blockParts []string
+	blockParts = append(blockParts, art, "", title, subtitle, "", hint)
+
+	// First-run tip: only when no default is set, gently suggest 'd'.
+	if defaultAutopilot == "" {
+		tip := lipgloss.NewStyle().
+			Foreground(colorSubtle).
+			Italic(true).
+			Render("Tip: Press 'd' to set a default autopilot mode for all new sessions")
+		blockParts = append(blockParts, "", tip)
+	}
+
+	block := lipgloss.JoinVertical(lipgloss.Center, blockParts...)
 
 	return lipgloss.NewStyle().
 		Height(height).
