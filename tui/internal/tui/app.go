@@ -71,7 +71,6 @@ type Model struct {
 	scrollOffset       int               // scroll position in zoom body
 	// defaultAutopilot is the global default autopilot mode for new sessions.
 	// Values: "" (off), "on" (AUTO), "yolo" (YOLO).
-	// TODO: wire to StateUpdate.DefaultAutopilot once Agent B's changes are merged.
 	defaultAutopilot string
 }
 
@@ -187,6 +186,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateMsg:
 		m.sessions = msg.Sessions
 		m.prs = msg.PRs
+		m.defaultAutopilot = msg.DefaultAutopilot
 		// Restore selection by ID to prevent jumping.
 		totalItems := len(m.sessions) + len(m.prs)
 		found := false
@@ -582,7 +582,6 @@ end tell`, tabIdx, tabIdx)
 
 	case "d":
 		// Cycle default autopilot mode for new sessions: "" → "on" → "yolo" → "".
-		// TODO: call m.client.SetDefaultAutopilot(m.defaultAutopilot) once client method exists.
 		switch m.defaultAutopilot {
 		case "":
 			m.defaultAutopilot = "on"
@@ -597,7 +596,11 @@ end tell`, tabIdx, tabIdx)
 			m.flash = "\u2022 default autopilot: OFF"
 			m.flashStyle = lipgloss.NewStyle().Foreground(colorDimFg)
 		}
-		return m, clearFlashAfter(2 * time.Second)
+		mode := m.defaultAutopilot
+		return m, tea.Batch(clearFlashAfter(2*time.Second), func() tea.Msg {
+			err := m.client.SetDefaultAutopilot(mode)
+			return actionResultMsg{action: "set default autopilot", err: err}
+		})
 
 	case "esc":
 		if m.mergePickerVisible {
