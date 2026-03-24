@@ -102,6 +102,7 @@ func renderHelp(width, height, scrollOffset int) string {
 		{"", "Sessions"},
 		{"Enter", "Focus — switch to Ghostty tab"},
 		{"a", "Cycle autopilot: OFF → ON → YOLO"},
+		{"d", "Cycle default autopilot for new sessions"},
 		{"y / n", "Approve / reject pending tool"},
 		{"A", "Approve all safe pending tools"},
 		{"Q", "Toggle approval queue"},
@@ -138,7 +139,8 @@ func renderHelp(width, height, scrollOffset int) string {
 
 	autopilotInfo := lipgloss.NewStyle().Foreground(colorDimFg).Italic(true).Render(
 		"Session: OFF → ON (safe auto) → YOLO (all, 10s grace for destructive)\n" +
-			"PR: OFF → AUTO (hammer CI + merge on approval) → YOLO (merge without review)")
+			"PR: OFF → AUTO (hammer CI + merge on approval) → YOLO (merge without review)\n" +
+			"Default autopilot ('d'): applies to new sessions only. Per-session overrides take precedence.")
 
 	stateInfo := lipgloss.NewStyle().Foreground(colorDimFg).Render(
 		"Sessions: \u25b6 running  \u23f8 waiting  \u2714 idle  \u25cf stopped\n" +
