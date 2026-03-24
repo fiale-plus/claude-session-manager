@@ -576,6 +576,25 @@ end tell`, tabIdx, tabIdx)
 			}
 		}
 
+	case "d":
+		// Cycle default autopilot mode for new sessions: "" → "on" → "yolo" → "".
+		// TODO: call m.client.SetDefaultAutopilot(m.defaultAutopilot) once client method exists.
+		switch m.defaultAutopilot {
+		case "":
+			m.defaultAutopilot = "on"
+			m.flash = "\u2699 default autopilot: AUTO"
+			m.flashStyle = styleAutopilotOn
+		case "on":
+			m.defaultAutopilot = "yolo"
+			m.flash = "\u26a0 default autopilot: YOLO"
+			m.flashStyle = styleAutopilotWarn
+		default:
+			m.defaultAutopilot = ""
+			m.flash = "\u2022 default autopilot: OFF"
+			m.flashStyle = lipgloss.NewStyle().Foreground(colorDimFg)
+		}
+		return m, clearFlashAfter(2 * time.Second)
+
 	case "esc":
 		if m.mergePickerVisible {
 			m.mergePickerVisible = false
