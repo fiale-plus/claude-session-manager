@@ -10,7 +10,8 @@ import (
 )
 
 // renderZoom renders the session detail panel with fixed header + scrollable body.
-func renderZoom(s client.Session, width, height int, scrollOffset int) string {
+// defaultAutopilot is the global default mode so we can annotate badges accordingly.
+func renderZoom(s client.Session, width, height int, scrollOffset int, defaultAutopilot string) string {
 	if width < 10 || height < 4 {
 		return ""
 	}
@@ -34,9 +35,17 @@ func renderZoom(s client.Session, width, height int, scrollOffset int) string {
 
 	switch s.AutopilotMode {
 	case "on":
-		line1 += " " + styleAutopilotOn.Render("\u2699 AUTO")
+		label := "\u2699 AUTO"
+		if s.AutopilotMode == defaultAutopilot {
+			label += " (default)"
+		}
+		line1 += " " + styleAutopilotOn.Render(label)
 	case "yolo":
-		line1 += " " + styleAutopilotWarn.Render("\u26a0 YOLO")
+		label := "\u26a0 YOLO"
+		if s.AutopilotMode == defaultAutopilot {
+			label += " (default)"
+		}
+		line1 += " " + styleAutopilotWarn.Render(label)
 	}
 
 	if s.PermissionMode == "plan" {

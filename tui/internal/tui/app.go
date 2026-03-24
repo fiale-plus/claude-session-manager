@@ -770,7 +770,7 @@ func (m Model) View() string {
 		mainContent = renderQueue(m.sessions, w, remainingHeight)
 	} else if isSession {
 		if sel := m.selected(); sel != nil {
-			mainContent = renderZoom(*sel, w, remainingHeight, m.scrollOffset)
+			mainContent = renderZoom(*sel, w, remainingHeight, m.scrollOffset, m.defaultAutopilot)
 		} else {
 			mainContent = renderEmptyState(w, remainingHeight)
 		}
