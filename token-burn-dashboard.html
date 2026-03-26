@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token Burn Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --opus: #da7756; --sonnet: #58a6ff; --haiku: #7ee787; --minimax: #d2a8ff; --synthetic: #484f58;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
+
+  .layout { display: grid; grid-template-columns: 280px 1fr; height: 100vh; }
+  .sidebar { background: var(--surface); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; }
+  .main { padding: 16px; overflow-y: auto; }
+
+  h1 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--accent); }
+  h2 { font-size: 13px; font-weight: 600; margin: 16px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  h3 { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+
+  .control-group { margin-bottom: 12px; }
+  .control-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  select, input[type="number"] {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 8px; border-radius: 4px; font-size: 13px; font-family: inherit;
+  }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
+
+  .toggle-row { display: flex; gap: 4px; margin-bottom: 8px; }
+  .toggle-btn {
+    flex: 1; padding: 6px 8px; font-size: 11px; font-family: inherit; cursor: pointer;
+    background: var(--bg); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 4px; text-align: center; transition: all 0.15s;
+  }
+  .toggle-btn.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+
+  .checkbox-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; cursor: pointer; }
+  .checkbox-row input { accent-color: var(--accent); }
+  .checkbox-row .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  .chart-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  canvas { width: 100% !important; }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px;
+  }
+  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-value { font-size: 22px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .stat-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  .pricing-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .pricing-table th { text-align: left; padding: 4px 6px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); }
+  .pricing-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); }
+  .pricing-table input {
+    width: 70px; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 2px 4px; border-radius: 3px; font-size: 12px; font-family: 'SF Mono', 'Fira Code', monospace;
+    text-align: right;
+  }
+
+  .breakdown-table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .breakdown-table th { text-align: right; padding: 6px 8px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); }
+  .breakdown-table th:first-child { text-align: left; }
+  .breakdown-table td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .breakdown-table td:first-child { text-align: left; font-family: inherit; }
+  .breakdown-table tr.total-row { font-weight: 700; border-top: 2px solid var(--border); }
+  .breakdown-table .bar-cell { text-align: left; }
+
+  .tab-bar { display: flex; gap: 2px; margin-bottom: 12px; }
+  .tab-btn {
+    padding: 8px 14px; font-size: 12px; font-family: inherit; cursor: pointer;
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 4px 4px 0 0; border-bottom: none; transition: all 0.15s;
+  }
+  .tab-btn.active { background: var(--surface); color: var(--text); font-weight: 600; }
+
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar">
+    <h1>Token Burn Dashboard</h1>
+
+    <h2>View</h2>
+    <div class="toggle-row" id="metric-toggle">
+      <button class="toggle-btn active" data-val="cost">Cost ($)</button>
+      <button class="toggle-btn" data-val="tokens">Tokens</button>
+      <button class="toggle-btn" data-val="messages">Messages</button>
+    </div>
+
+    <h2>Machines</h2>
+    <div class="checkbox-row" onclick="toggleMachine('local')">
+      <input type="checkbox" id="cb-local" checked>
+      <span class="dot" style="background:#58a6ff"></span>
+      <span>Local (macOS)</span>
+    </div>
+    <div class="checkbox-row" onclick="toggleMachine('remote')">
+      <input type="checkbox" id="cb-remote" checked>
+      <span class="dot" style="background:#d2a8ff"></span>
+      <span>openclaw-vm</span>
+    </div>
+
+    <h2>Models</h2>
+    <div id="model-checkboxes"></div>
+
+    <h2>Token Types</h2>
+    <div class="toggle-row" id="token-type-toggle">
+      <button class="toggle-btn active" data-val="all">All</button>
+      <button class="toggle-btn" data-val="io">In/Out</button>
+      <button class="toggle-btn" data-val="cache">Cache</button>
+    </div>
+
+    <h2>Chart Style</h2>
+    <div class="toggle-row" id="chart-style-toggle">
+      <button class="toggle-btn active" data-val="stacked">Stacked</button>
+      <button class="toggle-btn" data-val="grouped">Grouped</button>
+      <button class="toggle-btn" data-val="line">Line</button>
+    </div>
+
+    <h2>Scale</h2>
+    <div class="toggle-row" id="scale-toggle">
+      <button class="toggle-btn active" data-val="linear">Linear</button>
+      <button class="toggle-btn" data-val="log">Log</button>
+    </div>
+
+    <h2>Pricing ($/MTok)</h2>
+    <table class="pricing-table" id="pricing-table"></table>
+    <div style="margin-top:6px; font-size:11px; color:var(--muted)">
+      Cache write = 1hr tier. Edit to adjust.
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="stats-grid" id="stats-grid"></div>
+
+    <div class="tab-bar" id="tab-bar">
+      <button class="tab-btn active" data-tab="timeline">Timeline</button>
+      <button class="tab-btn" data-tab="models">By Model</button>
+      <button class="tab-btn" data-tab="machines">By Machine</button>
+      <button class="tab-btn" data-tab="breakdown">Cost Breakdown</button>
+      <button class="tab-btn" data-tab="token-mix">Token Mix</button>
+    </div>
+
+    <div class="tab-content active" id="tab-timeline">
+      <div class="chart-card">
+        <div class="legend" id="timeline-legend"></div>
+        <canvas id="timeline-chart" height="320"></canvas>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-models">
+      <div class="chart-card">
+        <div class="legend" id="model-legend"></div>
+        <canvas id="model-chart" height="320"></canvas>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-machines">
+      <div class="chart-card">
+        <div class="legend" id="machine-legend"></div>
+        <canvas id="machine-chart" height="320"></canvas>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-breakdown">
+      <div class="chart-card">
+        <h3>Cost Breakdown by Model + Token Type</h3>
+        <table class="breakdown-table" id="cost-table"></table>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-token-mix">
+      <div class="chart-card">
+        <h3>Token Type Distribution</h3>
+        <canvas id="mix-chart" height="280"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>Cache Efficiency (Read / Total Cache)</h3>
+        <canvas id="cache-chart" height="200"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// DATA
+// ═══════════════════════════════════════════════════════════════
+const LOCAL_DATA = [{"date":"2026-02-25","model":"claude-sonnet-4-6","input_tokens":38,"output_tokens":9751,"cache_write_tokens":151688,"cache_read_tokens":1520178,"total_tokens":1681655,"messages":34},{"date":"2026-02-26","model":"claude-sonnet-4-6","input_tokens":160,"output_tokens":36825,"cache_write_tokens":368570,"cache_read_tokens":5461623,"total_tokens":5867178,"messages":108},{"date":"2026-02-27","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":2},{"date":"2026-02-27","model":"claude-haiku-4-5-20251001","input_tokens":27468,"output_tokens":22692,"cache_write_tokens":559027,"cache_read_tokens":5629661,"total_tokens":6238848,"messages":213},{"date":"2026-02-27","model":"claude-sonnet-4-6","input_tokens":20373,"output_tokens":128048,"cache_write_tokens":1264753,"cache_read_tokens":36051508,"total_tokens":37464682,"messages":568},{"date":"2026-02-28","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":1},{"date":"2026-02-28","model":"claude-haiku-4-5-20251001","input_tokens":313,"output_tokens":6024,"cache_write_tokens":192002,"cache_read_tokens":1120432,"total_tokens":1318771,"messages":64},{"date":"2026-02-28","model":"claude-sonnet-4-6","input_tokens":1032,"output_tokens":164338,"cache_write_tokens":2714509,"cache_read_tokens":49875100,"total_tokens":52754979,"messages":640},{"date":"2026-03-01","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":2},{"date":"2026-03-01","model":"claude-sonnet-4-6","input_tokens":415,"output_tokens":156491,"cache_write_tokens":771713,"cache_read_tokens":31061362,"total_tokens":31989981,"messages":303},{"date":"2026-03-02","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":1},{"date":"2026-03-02","model":"claude-haiku-4-5-20251001","input_tokens":8489,"output_tokens":24546,"cache_write_tokens":661667,"cache_read_tokens":5133005,"total_tokens":5827707,"messages":176},{"date":"2026-03-02","model":"claude-sonnet-4-6","input_tokens":19831,"output_tokens":161044,"cache_write_tokens":2267087,"cache_read_tokens":38532426,"total_tokens":40980388,"messages":577},{"date":"2026-03-03","model":"claude-sonnet-4-6","input_tokens":2147,"output_tokens":72839,"cache_write_tokens":969290,"cache_read_tokens":9661591,"total_tokens":10705867,"messages":170},{"date":"2026-03-04","model":"claude-haiku-4-5-20251001","input_tokens":210,"output_tokens":9215,"cache_write_tokens":265904,"cache_read_tokens":1018405,"total_tokens":1293734,"messages":39},{"date":"2026-03-04","model":"claude-sonnet-4-6","input_tokens":164,"output_tokens":31155,"cache_write_tokens":645433,"cache_read_tokens":6699034,"total_tokens":7375786,"messages":120},{"date":"2026-03-06","model":"claude-sonnet-4-6","input_tokens":19905,"output_tokens":81442,"cache_write_tokens":1172107,"cache_read_tokens":9332473,"total_tokens":10605927,"messages":185},{"date":"2026-03-07","model":"claude-sonnet-4-6","input_tokens":46,"output_tokens":3257,"cache_write_tokens":81471,"cache_read_tokens":110422,"total_tokens":195196,"messages":16},{"date":"2026-03-09","model":"claude-haiku-4-5-20251001","input_tokens":6456,"output_tokens":16516,"cache_write_tokens":514082,"cache_read_tokens":2789162,"total_tokens":3326216,"messages":90},{"date":"2026-03-09","model":"claude-opus-4-6","input_tokens":21069,"output_tokens":63548,"cache_write_tokens":2674644,"cache_read_tokens":24269562,"total_tokens":27028823,"messages":357},{"date":"2026-03-09","model":"claude-sonnet-4-6","input_tokens":1304,"output_tokens":4535,"cache_write_tokens":224043,"cache_read_tokens":135729,"total_tokens":365611,"messages":11},{"date":"2026-03-10","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":4},{"date":"2026-03-10","model":"claude-haiku-4-5-20251001","input_tokens":15014,"output_tokens":48785,"cache_write_tokens":2368072,"cache_read_tokens":13209517,"total_tokens":15641388,"messages":335},{"date":"2026-03-10","model":"claude-opus-4-6","input_tokens":50478,"output_tokens":684129,"cache_write_tokens":9101149,"cache_read_tokens":244967634,"total_tokens":254803390,"messages":2990},{"date":"2026-03-10","model":"claude-sonnet-4-6","input_tokens":452,"output_tokens":53442,"cache_write_tokens":1332652,"cache_read_tokens":34597618,"total_tokens":35984164,"messages":368},{"date":"2026-03-11","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":35},{"date":"2026-03-11","model":"claude-haiku-4-5-20251001","input_tokens":27411,"output_tokens":21548,"cache_write_tokens":809093,"cache_read_tokens":3755960,"total_tokens":4614012,"messages":152},{"date":"2026-03-11","model":"claude-opus-4-6","input_tokens":48033,"output_tokens":683935,"cache_write_tokens":8360748,"cache_read_tokens":313108584,"total_tokens":322201300,"messages":4128},{"date":"2026-03-12","model":"claude-haiku-4-5-20251001","input_tokens":7023,"output_tokens":6324,"cache_write_tokens":331016,"cache_read_tokens":3946306,"total_tokens":4290669,"messages":108},{"date":"2026-03-12","model":"claude-opus-4-6","input_tokens":43437,"output_tokens":711750,"cache_write_tokens":6816023,"cache_read_tokens":217318989,"total_tokens":224890199,"messages":3035},{"date":"2026-03-13","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":6},{"date":"2026-03-13","model":"claude-haiku-4-5-20251001","input_tokens":1712,"output_tokens":22331,"cache_write_tokens":754842,"cache_read_tokens":4954345,"total_tokens":5733230,"messages":160},{"date":"2026-03-13","model":"claude-opus-4-6","input_tokens":2894,"output_tokens":286992,"cache_write_tokens":7619985,"cache_read_tokens":142202697,"total_tokens":150112568,"messages":1140},{"date":"2026-03-14","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":11},{"date":"2026-03-14","model":"claude-haiku-4-5-20251001","input_tokens":612,"output_tokens":7494,"cache_write_tokens":483272,"cache_read_tokens":1723356,"total_tokens":2214734,"messages":64},{"date":"2026-03-14","model":"claude-opus-4-6","input_tokens":18404,"output_tokens":341124,"cache_write_tokens":14064098,"cache_read_tokens":313362894,"total_tokens":327786520,"messages":1737},{"date":"2026-03-15","model":"claude-haiku-4-5-20251001","input_tokens":38477,"output_tokens":15874,"cache_write_tokens":495710,"cache_read_tokens":4133448,"total_tokens":4683509,"messages":99},{"date":"2026-03-15","model":"claude-opus-4-6","input_tokens":5550,"output_tokens":359390,"cache_write_tokens":7210990,"cache_read_tokens":366987359,"total_tokens":374563289,"messages":1838},{"date":"2026-03-16","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":2},{"date":"2026-03-16","model":"claude-haiku-4-5-20251001","input_tokens":10666,"output_tokens":28002,"cache_write_tokens":1070869,"cache_read_tokens":5910311,"total_tokens":7019848,"messages":168},{"date":"2026-03-16","model":"claude-opus-4-6","input_tokens":17438,"output_tokens":886140,"cache_write_tokens":20067874,"cache_read_tokens":861228865,"total_tokens":882200317,"messages":4484},{"date":"2026-03-16","model":"claude-sonnet-4-6","input_tokens":47,"output_tokens":6640,"cache_write_tokens":78845,"cache_read_tokens":1082352,"total_tokens":1167884,"messages":42},{"date":"2026-03-17","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":13},{"date":"2026-03-17","model":"claude-haiku-4-5-20251001","input_tokens":1214,"output_tokens":30212,"cache_write_tokens":1432894,"cache_read_tokens":8399674,"total_tokens":9863994,"messages":263},{"date":"2026-03-17","model":"claude-opus-4-6","input_tokens":66416,"output_tokens":887996,"cache_write_tokens":16140598,"cache_read_tokens":224610535,"total_tokens":241705545,"messages":2490},{"date":"2026-03-17","model":"claude-sonnet-4-6","input_tokens":63893,"output_tokens":776772,"cache_write_tokens":7213785,"cache_read_tokens":210876648,"total_tokens":218931098,"messages":3314},{"date":"2026-03-18","model":"claude-opus-4-6","input_tokens":26292,"output_tokens":725288,"cache_write_tokens":5658415,"cache_read_tokens":180734525,"total_tokens":187144520,"messages":2245},{"date":"2026-03-18","model":"claude-sonnet-4-6","input_tokens":1,"output_tokens":8,"cache_write_tokens":6122,"cache_read_tokens":148151,"total_tokens":154282,"messages":1},{"date":"2026-03-19","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":7},{"date":"2026-03-19","model":"claude-haiku-4-5-20251001","input_tokens":21380,"output_tokens":42515,"cache_write_tokens":1719615,"cache_read_tokens":18044990,"total_tokens":19828500,"messages":460},{"date":"2026-03-19","model":"claude-opus-4-6","input_tokens":26627,"output_tokens":423464,"cache_write_tokens":14455766,"cache_read_tokens":163649922,"total_tokens":178555779,"messages":1799},{"date":"2026-03-19","model":"claude-sonnet-4-6","input_tokens":1427,"output_tokens":13690,"cache_write_tokens":126582,"cache_read_tokens":1306368,"total_tokens":1448067,"messages":77},{"date":"2026-03-20","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":7},{"date":"2026-03-20","model":"claude-haiku-4-5-20251001","input_tokens":698,"output_tokens":16660,"cache_write_tokens":646859,"cache_read_tokens":3622093,"total_tokens":4286310,"messages":117},{"date":"2026-03-20","model":"claude-opus-4-6","input_tokens":20346,"output_tokens":516780,"cache_write_tokens":16281754,"cache_read_tokens":230308210,"total_tokens":247127090,"messages":3730},{"date":"2026-03-20","model":"claude-sonnet-4-6","input_tokens":1266,"output_tokens":192470,"cache_write_tokens":2418607,"cache_read_tokens":44470722,"total_tokens":47083065,"messages":1127},{"date":"2026-03-21","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":2},{"date":"2026-03-21","model":"MiniMax-M2.7","input_tokens":175801,"output_tokens":1303,"cache_write_tokens":231814,"cache_read_tokens":587504,"total_tokens":996422,"messages":27},{"date":"2026-03-21","model":"claude-haiku-4-5-20251001","input_tokens":860,"output_tokens":90040,"cache_write_tokens":489573,"cache_read_tokens":9537614,"total_tokens":10118087,"messages":240},{"date":"2026-03-21","model":"claude-opus-4-6","input_tokens":23887,"output_tokens":202240,"cache_write_tokens":6820892,"cache_read_tokens":304739165,"total_tokens":311786184,"messages":810},{"date":"2026-03-21","model":"claude-sonnet-4-6","input_tokens":9111,"output_tokens":597908,"cache_write_tokens":4207458,"cache_read_tokens":56956225,"total_tokens":61770702,"messages":1348},{"date":"2026-03-22","model":"claude-opus-4-6","input_tokens":12,"output_tokens":417,"cache_write_tokens":1614,"cache_read_tokens":2625020,"total_tokens":2627063,"messages":4},{"date":"2026-03-23","model":"claude-opus-4-6","input_tokens":561,"output_tokens":47314,"cache_write_tokens":1221601,"cache_read_tokens":20964409,"total_tokens":22233885,"messages":347},{"date":"2026-03-24","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":2},{"date":"2026-03-24","model":"claude-haiku-4-5-20251001","input_tokens":808,"output_tokens":19355,"cache_write_tokens":1290352,"cache_read_tokens":7749995,"total_tokens":9060510,"messages":187},{"date":"2026-03-24","model":"claude-opus-4-6","input_tokens":17780,"output_tokens":186335,"cache_write_tokens":2639721,"cache_read_tokens":74191010,"total_tokens":77034846,"messages":732},{"date":"2026-03-24","model":"claude-sonnet-4-6","input_tokens":264,"output_tokens":40743,"cache_write_tokens":371288,"cache_read_tokens":10296404,"total_tokens":10708699,"messages":243},{"date":"2026-03-25","model":"claude-haiku-4-5-20251001","input_tokens":29,"output_tokens":7114,"cache_write_tokens":116169,"cache_read_tokens":2501205,"total_tokens":2624517,"messages":57},{"date":"2026-03-25","model":"claude-opus-4-6","input_tokens":101707,"output_tokens":137914,"cache_write_tokens":2844085,"cache_read_tokens":38475985,"total_tokens":41559691,"messages":639}];
+
+const REMOTE_DATA = [{"date":"2026-02-27","model":"claude-sonnet-4-6","input_tokens":51018,"output_tokens":29673,"cache_write_tokens":270906,"cache_read_tokens":7961106,"total_tokens":8312703,"messages":112},{"date":"2026-02-28","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":2},{"date":"2026-02-28","model":"claude-haiku-4-5-20251001","input_tokens":78517,"output_tokens":45532,"cache_write_tokens":1499286,"cache_read_tokens":8842672,"total_tokens":10466007,"messages":347},{"date":"2026-02-28","model":"claude-opus-4-6","input_tokens":3,"output_tokens":424,"cache_write_tokens":17456,"cache_read_tokens":0,"total_tokens":17883,"messages":1},{"date":"2026-02-28","model":"claude-sonnet-4-5-20250929","input_tokens":58,"output_tokens":30,"cache_write_tokens":140923,"cache_read_tokens":302137,"total_tokens":443148,"messages":13},{"date":"2026-02-28","model":"claude-sonnet-4-6","input_tokens":71588,"output_tokens":530460,"cache_write_tokens":4953430,"cache_read_tokens":113175287,"total_tokens":118730765,"messages":2232},{"date":"2026-03-01","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":2},{"date":"2026-03-01","model":"claude-haiku-4-5-20251001","input_tokens":466,"output_tokens":31179,"cache_write_tokens":359140,"cache_read_tokens":3252725,"total_tokens":3643510,"messages":120},{"date":"2026-03-01","model":"claude-opus-4-6","input_tokens":4403,"output_tokens":12420,"cache_write_tokens":124601,"cache_read_tokens":1258924,"total_tokens":1400348,"messages":50},{"date":"2026-03-01","model":"claude-sonnet-4-6","input_tokens":8522,"output_tokens":252378,"cache_write_tokens":3764447,"cache_read_tokens":28126231,"total_tokens":32151578,"messages":464},{"date":"2026-03-02","model":"claude-sonnet-4-6","input_tokens":1315,"output_tokens":15191,"cache_write_tokens":468261,"cache_read_tokens":2414816,"total_tokens":2899583,"messages":29},{"date":"2026-03-03","model":"claude-sonnet-4-6","input_tokens":8,"output_tokens":825,"cache_write_tokens":21784,"cache_read_tokens":77614,"total_tokens":100231,"messages":4},{"date":"2026-03-07","model":"claude-sonnet-4-6","input_tokens":888,"output_tokens":10256,"cache_write_tokens":145802,"cache_read_tokens":2016830,"total_tokens":2173776,"messages":74},{"date":"2026-03-08","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":1},{"date":"2026-03-08","model":"claude-sonnet-4-6","input_tokens":387,"output_tokens":3275,"cache_write_tokens":153155,"cache_read_tokens":503143,"total_tokens":659960,"messages":31},{"date":"2026-03-20","model":"claude-sonnet-4-6","input_tokens":264,"output_tokens":37396,"cache_write_tokens":711007,"cache_read_tokens":10775509,"total_tokens":11524176,"messages":186},{"date":"2026-03-21","model":"claude-haiku-4-5-20251001","input_tokens":448,"output_tokens":15899,"cache_write_tokens":308631,"cache_read_tokens":2785724,"total_tokens":3110702,"messages":119},{"date":"2026-03-21","model":"claude-opus-4-6","input_tokens":26,"output_tokens":2658,"cache_write_tokens":298884,"cache_read_tokens":349230,"total_tokens":650798,"messages":18},{"date":"2026-03-21","model":"claude-sonnet-4-6","input_tokens":317,"output_tokens":70054,"cache_write_tokens":507806,"cache_read_tokens":17519037,"total_tokens":18097214,"messages":215},{"date":"2026-03-22","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":2},{"date":"2026-03-22","model":"MiniMax-M2.7","input_tokens":6950934,"output_tokens":16888,"cache_write_tokens":560232,"cache_read_tokens":9990534,"total_tokens":17518588,"messages":390},{"date":"2026-03-22","model":"claude-haiku-4-5-20251001","input_tokens":55211,"output_tokens":65550,"cache_write_tokens":2495534,"cache_read_tokens":17481808,"total_tokens":20098103,"messages":548},{"date":"2026-03-22","model":"claude-opus-4-6","input_tokens":67277,"output_tokens":704144,"cache_write_tokens":12643249,"cache_read_tokens":332560318,"total_tokens":345974988,"messages":3335},{"date":"2026-03-22","model":"claude-sonnet-4-6","input_tokens":2917,"output_tokens":169767,"cache_write_tokens":1841086,"cache_read_tokens":39277367,"total_tokens":41291137,"messages":692},{"date":"2026-03-23","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":20},{"date":"2026-03-23","model":"MiniMax-M2.7","input_tokens":157781186,"output_tokens":538546,"cache_write_tokens":4397352,"cache_read_tokens":107254677,"total_tokens":269971761,"messages":3561},{"date":"2026-03-23","model":"claude-haiku-4-5-20251001","input_tokens":18092,"output_tokens":81775,"cache_write_tokens":2343123,"cache_read_tokens":21240828,"total_tokens":23683818,"messages":639},{"date":"2026-03-23","model":"claude-opus-4-6","input_tokens":72788,"output_tokens":741278,"cache_write_tokens":20306353,"cache_read_tokens":663326273,"total_tokens":684446692,"messages":3468},{"date":"2026-03-24","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":12},{"date":"2026-03-24","model":"MiniMax-M2.7","input_tokens":143683668,"output_tokens":427809,"cache_write_tokens":1419148,"cache_read_tokens":64324229,"total_tokens":209854854,"messages":2609},{"date":"2026-03-24","model":"claude-haiku-4-5-20251001","input_tokens":23787,"output_tokens":65601,"cache_write_tokens":3364083,"cache_read_tokens":21242365,"total_tokens":24695836,"messages":604},{"date":"2026-03-24","model":"claude-opus-4-6","input_tokens":84747,"output_tokens":715198,"cache_write_tokens":14747194,"cache_read_tokens":380720370,"total_tokens":396267509,"messages":2792},{"date":"2026-03-25","model":"<synthetic>","input_tokens":0,"output_tokens":0,"cache_write_tokens":0,"cache_read_tokens":0,"total_tokens":0,"messages":5},{"date":"2026-03-25","model":"MiniMax-M2.7","input_tokens":153116235,"output_tokens":532323,"cache_write_tokens":3848462,"cache_read_tokens":97258394,"total_tokens":254755414,"messages":3827},{"date":"2026-03-25","model":"claude-haiku-4-5-20251001","input_tokens":29854,"output_tokens":83588,"cache_write_tokens":2272372,"cache_read_tokens":22186339,"total_tokens":24572153,"messages":588},{"date":"2026-03-25","model":"claude-opus-4-6","input_tokens":73765,"output_tokens":580334,"cache_write_tokens":10311534,"cache_read_tokens":236936219,"total_tokens":247901852,"messages":2851},{"date":"2026-03-25","model":"claude-sonnet-4-6","input_tokens":26462,"output_tokens":11429,"cache_write_tokens":207371,"cache_read_tokens":1027090,"total_tokens":1272352,"messages":63}];
+
+// ═══════════════════════════════════════════════════════════════
+// PRICING — verified March 2026
+// ═══════════════════════════════════════════════════════════════
+const PRICING = {
+  'claude-opus-4-6':          { input: 5.00,  output: 25.00, cache_write: 10.00, cache_read: 0.50, label: 'Opus 4.6',   color: '#da7756' },
+  'claude-sonnet-4-6':        { input: 3.00,  output: 15.00, cache_write: 6.00,  cache_read: 0.30, label: 'Sonnet 4.6', color: '#58a6ff' },
+  'claude-sonnet-4-5-20250929':{ input: 3.00,  output: 15.00, cache_write: 6.00,  cache_read: 0.30, label: 'Sonnet 4.5', color: '#388bdf' },
+  'claude-haiku-4-5-20251001':{ input: 1.00,  output: 5.00,  cache_write: 2.00,  cache_read: 0.10, label: 'Haiku 4.5',  color: '#7ee787' },
+  'MiniMax-M2.7':             { input: 0.30,  output: 1.20,  cache_write: 0.375, cache_read: 0.06, label: 'MiniMax M2.7',color: '#d2a8ff' },
+  '<synthetic>':              { input: 0,     output: 0,     cache_write: 0,     cache_read: 0,    label: 'Synthetic',  color: '#484f58' },
+};
+
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════
+const state = {
+  metric: 'cost',
+  machines: { local: true, remote: true },
+  models: {},
+  tokenType: 'all',
+  chartStyle: 'stacked',
+  scale: 'linear',
+  activeTab: 'timeline',
+};
+
+// Discover all models
+const allModels = new Set();
+[...LOCAL_DATA, ...REMOTE_DATA].forEach(d => { if (d.model !== '<synthetic>') allModels.add(d.model); });
+allModels.forEach(m => { state.models[m] = true; });
+
+// ═══════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════
+function fmtTok(n) {
+  if (n >= 1e9) return (n/1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return n.toString();
+}
+function fmtUSD(n) {
+  if (n >= 1000) return '$' + n.toLocaleString('en', {maximumFractionDigits: 0});
+  if (n >= 1) return '$' + n.toFixed(2);
+  return '$' + n.toFixed(4);
+}
+
+function getCost(row) {
+  const p = PRICING[row.model] || PRICING['claude-opus-4-6'];
+  return (
+    row.input_tokens * p.input / 1e6 +
+    row.output_tokens * p.output / 1e6 +
+    row.cache_write_tokens * p.cache_write / 1e6 +
+    row.cache_read_tokens * p.cache_read / 1e6
+  );
+}
+
+function getMetricValue(row) {
+  if (state.metric === 'cost') return getCost(row);
+  if (state.metric === 'messages') return row.messages;
+  // tokens — filtered by type
+  if (state.tokenType === 'io') return row.input_tokens + row.output_tokens;
+  if (state.tokenType === 'cache') return row.cache_write_tokens + row.cache_read_tokens;
+  return row.total_tokens;
+}
+
+function getFilteredData() {
+  let data = [];
+  if (state.machines.local) data.push(...LOCAL_DATA.map(d => ({...d, machine: 'local'})));
+  if (state.machines.remote) data.push(...REMOTE_DATA.map(d => ({...d, machine: 'remote'})));
+  return data.filter(d => d.model === '<synthetic>' ? false : state.models[d.model] !== false);
+}
+
+function getAllDates() {
+  const dates = new Set();
+  [...LOCAL_DATA, ...REMOTE_DATA].forEach(d => dates.add(d.date));
+  return [...dates].sort();
+}
+
+function modelLabel(m) { return (PRICING[m] || {}).label || m; }
+function modelColor(m) { return (PRICING[m] || {}).color || '#666'; }
+
+// ═══════════════════════════════════════════════════════════════
+// CANVAS DRAWING
+// ═══════════════════════════════════════════════════════════════
+function setupCanvas(canvas) {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const w = rect.width - 32;
+  if (!canvas.dataset.baseHeight) canvas.dataset.baseHeight = canvas.getAttribute('height');
+  const h = parseInt(canvas.dataset.baseHeight);
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+
+function drawBarChart(canvas, labels, series, opts = {}) {
+  const { ctx, w, h } = setupCanvas(canvas);
+  const pad = { top: 20, right: 20, bottom: 50, left: 70 };
+  const cw = w - pad.left - pad.right;
+  const ch = h - pad.top - pad.bottom;
+  const useLog = state.scale === 'log';
+
+  // Find max
+  let maxVal = 0;
+  if (state.chartStyle === 'stacked' || state.chartStyle === 'line') {
+    for (let i = 0; i < labels.length; i++) {
+      let sum = 0;
+      series.forEach(s => { sum += (s.data[i] || 0); });
+      maxVal = Math.max(maxVal, sum);
+    }
+  } else {
+    series.forEach(s => s.data.forEach(v => { maxVal = Math.max(maxVal, v); }));
+  }
+  if (maxVal === 0) maxVal = 1;
+  maxVal *= 1.1;
+
+  // Scale helpers
+  const logMin = 1; // floor for log
+  const logMax = Math.log10(maxVal);
+  function valToY(val) {
+    if (useLog) {
+      if (val <= 0) return pad.top + ch;
+      const logVal = Math.log10(Math.max(val, logMin));
+      return pad.top + ch - (logVal / logMax * ch);
+    }
+    return pad.top + ch - (val / maxVal * ch);
+  }
+  function valToH(val) {
+    return (pad.top + ch) - valToY(val);
+  }
+
+  // Grid
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.textAlign = 'right';
+
+  if (useLog) {
+    // Log grid: powers of 10
+    const maxPow = Math.ceil(logMax);
+    for (let p = 0; p <= maxPow; p++) {
+      const val = Math.pow(10, p);
+      const y = valToY(val);
+      if (y < pad.top - 5 || y > pad.top + ch + 5) continue;
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+      const label = state.metric === 'cost' ? fmtUSD(val) : state.metric === 'messages' ? val.toString() : fmtTok(val);
+      ctx.fillText(label, pad.left - 8, y + 4);
+    }
+  } else {
+    const gridLines = 5;
+    for (let i = 0; i <= gridLines; i++) {
+      const y = pad.top + ch - (i / gridLines * ch);
+      const val = maxVal * i / gridLines;
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+      const label = state.metric === 'cost' ? fmtUSD(val) : state.metric === 'messages' ? Math.round(val).toString() : fmtTok(val);
+      ctx.fillText(label, pad.left - 8, y + 4);
+    }
+  }
+
+  const barGroupW = cw / labels.length;
+  const gap = Math.max(2, barGroupW * 0.15);
+
+  if (state.chartStyle === 'line') {
+    series.forEach(s => {
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      s.data.forEach((v, i) => {
+        const x = pad.left + barGroupW * i + barGroupW / 2;
+        const y = valToY(v);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.fillStyle = s.color;
+      s.data.forEach((v, i) => {
+        const x = pad.left + barGroupW * i + barGroupW / 2;
+        const y = valToY(v);
+        ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+      });
+    });
+  } else if (state.chartStyle === 'stacked') {
+    for (let i = 0; i < labels.length; i++) {
+      let runningTotal = 0;
+      const x = pad.left + barGroupW * i + gap / 2;
+      const bw = barGroupW - gap;
+      series.forEach(s => {
+        const val = s.data[i] || 0;
+        if (val <= 0) return;
+        const prevTotal = runningTotal;
+        runningTotal += val;
+        const yTop = valToY(runningTotal);
+        const yBot = valToY(prevTotal > 0 ? prevTotal : 0);
+        ctx.fillStyle = s.color;
+        ctx.fillRect(x, yTop, bw, Math.max(0, yBot - yTop));
+      });
+    }
+  } else {
+    const subBarW = (barGroupW - gap) / series.length;
+    for (let i = 0; i < labels.length; i++) {
+      series.forEach((s, si) => {
+        const val = s.data[i] || 0;
+        const barH = valToH(val);
+        const x = pad.left + barGroupW * i + gap / 2 + subBarW * si;
+        ctx.fillStyle = s.color;
+        ctx.fillRect(x, pad.top + ch - barH, subBarW - 1, barH);
+      });
+    }
+  }
+
+  // X labels
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  const skip = labels.length > 20 ? 2 : 1;
+  labels.forEach((l, i) => {
+    if (i % skip !== 0) return;
+    const x = pad.left + barGroupW * i + barGroupW / 2;
+    ctx.save();
+    ctx.translate(x, pad.top + ch + 14);
+    ctx.rotate(-0.4);
+    ctx.fillText(l.slice(5), 0, 0); // MM-DD
+    ctx.restore();
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════════════
+function renderStats() {
+  const data = getFilteredData();
+  let totalCost = 0, totalTokens = 0, totalMsgs = 0;
+  const dates = new Set();
+  data.forEach(d => {
+    totalCost += getCost(d);
+    totalTokens += d.total_tokens;
+    totalMsgs += d.messages;
+    dates.add(d.date);
+  });
+  const days = dates.size || 1;
+  const avgCost = totalCost / days;
+
+  document.getElementById('stats-grid').innerHTML = `
+    <div class="stat-card">
+      <div class="stat-label">Total Cost (est.)</div>
+      <div class="stat-value">${fmtUSD(totalCost)}</div>
+      <div class="stat-sub">${days} days</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total Tokens</div>
+      <div class="stat-value">${fmtTok(totalTokens)}</div>
+      <div class="stat-sub">${fmtTok(totalMsgs)} messages</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Avg / Day</div>
+      <div class="stat-value">${fmtUSD(avgCost)}</div>
+      <div class="stat-sub">${fmtTok(Math.round(totalTokens / days))} tok/day</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">30-Day Projection</div>
+      <div class="stat-value">${fmtUSD(avgCost * 30)}</div>
+      <div class="stat-sub">${fmtTok(Math.round(totalTokens / days * 30))} tokens</div>
+    </div>
+  `;
+}
+
+function renderTimeline() {
+  const data = getFilteredData();
+  const dates = getAllDates();
+  const models = [...allModels].filter(m => state.models[m] !== false);
+
+  // Aggregate by date + model
+  const byDateModel = {};
+  data.forEach(d => {
+    const k = d.date + '|' + d.model;
+    if (!byDateModel[k]) byDateModel[k] = { ...d, cost: getCost(d) };
+    else {
+      byDateModel[k].input_tokens += d.input_tokens;
+      byDateModel[k].output_tokens += d.output_tokens;
+      byDateModel[k].cache_write_tokens += d.cache_write_tokens;
+      byDateModel[k].cache_read_tokens += d.cache_read_tokens;
+      byDateModel[k].total_tokens += d.total_tokens;
+      byDateModel[k].messages += d.messages;
+      byDateModel[k].cost += getCost(d);
+    }
+  });
+
+  const series = models.map(m => ({
+    label: modelLabel(m),
+    color: modelColor(m),
+    data: dates.map(d => {
+      const row = byDateModel[d + '|' + m];
+      if (!row) return 0;
+      return state.metric === 'cost' ? row.cost : getMetricValue(row);
+    }),
+  }));
+
+  const legendEl = document.getElementById('timeline-legend');
+  legendEl.innerHTML = series.map(s =>
+    `<div class="legend-item"><div class="legend-dot" style="background:${s.color}"></div>${s.label}</div>`
+  ).join('');
+
+  drawBarChart(document.getElementById('timeline-chart'), dates, series);
+}
+
+function renderModels() {
+  const data = getFilteredData();
+  const dates = getAllDates();
+
+  // Aggregate by date for each model
+  const models = [...allModels].filter(m => state.models[m] !== false);
+  const byDate = {};
+  data.forEach(d => {
+    if (!byDate[d.date]) byDate[d.date] = {};
+    if (!byDate[d.date][d.model]) byDate[d.date][d.model] = { ...d };
+    else {
+      const t = byDate[d.date][d.model];
+      t.input_tokens += d.input_tokens; t.output_tokens += d.output_tokens;
+      t.cache_write_tokens += d.cache_write_tokens; t.cache_read_tokens += d.cache_read_tokens;
+      t.total_tokens += d.total_tokens; t.messages += d.messages;
+    }
+  });
+
+  const series = models.map(m => ({
+    label: modelLabel(m), color: modelColor(m),
+    data: dates.map(d => {
+      const row = byDate[d] && byDate[d][m];
+      if (!row) return 0;
+      return state.metric === 'cost' ? getCost(row) : getMetricValue(row);
+    }),
+  }));
+
+  document.getElementById('model-legend').innerHTML = series.map(s =>
+    `<div class="legend-item"><div class="legend-dot" style="background:${s.color}"></div>${s.label}</div>`
+  ).join('');
+  drawBarChart(document.getElementById('model-chart'), dates, series);
+}
+
+function renderMachines() {
+  const dates = getAllDates();
+  const agg = { local: {}, remote: {} };
+
+  LOCAL_DATA.forEach(d => {
+    if (d.model === '<synthetic>' || state.models[d.model] === false) return;
+    if (!agg.local[d.date]) agg.local[d.date] = { ...d };
+    else {
+      const t = agg.local[d.date];
+      t.input_tokens += d.input_tokens; t.output_tokens += d.output_tokens;
+      t.cache_write_tokens += d.cache_write_tokens; t.cache_read_tokens += d.cache_read_tokens;
+      t.total_tokens += d.total_tokens; t.messages += d.messages;
+    }
+  });
+  REMOTE_DATA.forEach(d => {
+    if (d.model === '<synthetic>' || state.models[d.model] === false) return;
+    if (!agg.remote[d.date]) agg.remote[d.date] = { ...d };
+    else {
+      const t = agg.remote[d.date];
+      t.input_tokens += d.input_tokens; t.output_tokens += d.output_tokens;
+      t.cache_write_tokens += d.cache_write_tokens; t.cache_read_tokens += d.cache_read_tokens;
+      t.total_tokens += d.total_tokens; t.messages += d.messages;
+    }
+  });
+
+  const series = [];
+  if (state.machines.local) series.push({
+    label: 'Local', color: '#58a6ff',
+    data: dates.map(d => {
+      const row = agg.local[d];
+      if (!row) return 0;
+      return state.metric === 'cost' ? getCost(row) : getMetricValue(row);
+    }),
+  });
+  if (state.machines.remote) series.push({
+    label: 'openclaw-vm', color: '#d2a8ff',
+    data: dates.map(d => {
+      const row = agg.remote[d];
+      if (!row) return 0;
+      return state.metric === 'cost' ? getCost(row) : getMetricValue(row);
+    }),
+  });
+
+  document.getElementById('machine-legend').innerHTML = series.map(s =>
+    `<div class="legend-item"><div class="legend-dot" style="background:${s.color}"></div>${s.label}</div>`
+  ).join('');
+  drawBarChart(document.getElementById('machine-chart'), dates, series);
+}
+
+function renderBreakdown() {
+  const data = getFilteredData();
+  const byModel = {};
+  data.forEach(d => {
+    if (!byModel[d.model]) byModel[d.model] = { input: 0, output: 0, cw: 0, cr: 0, msgs: 0 };
+    byModel[d.model].input += d.input_tokens;
+    byModel[d.model].output += d.output_tokens;
+    byModel[d.model].cw += d.cache_write_tokens;
+    byModel[d.model].cr += d.cache_read_tokens;
+    byModel[d.model].msgs += d.messages;
+  });
+
+  let html = `<tr><th>Model</th><th>Input</th><th>$ Input</th><th>Output</th><th>$ Output</th><th>Cache W</th><th>$ CW</th><th>Cache R</th><th>$ CR</th><th>Total $</th><th>Msgs</th></tr>`;
+
+  let grandTotal = { input: 0, output: 0, cw: 0, cr: 0, ci: 0, co: 0, ccw: 0, ccr: 0, total: 0, msgs: 0 };
+
+  Object.keys(byModel).sort().forEach(m => {
+    const b = byModel[m];
+    const p = PRICING[m] || PRICING['claude-opus-4-6'];
+    const ci = b.input * p.input / 1e6;
+    const co = b.output * p.output / 1e6;
+    const ccw = b.cw * p.cache_write / 1e6;
+    const ccr = b.cr * p.cache_read / 1e6;
+    const total = ci + co + ccw + ccr;
+
+    html += `<tr>
+      <td style="color:${modelColor(m)}">${modelLabel(m)}</td>
+      <td>${fmtTok(b.input)}</td><td>${fmtUSD(ci)}</td>
+      <td>${fmtTok(b.output)}</td><td>${fmtUSD(co)}</td>
+      <td>${fmtTok(b.cw)}</td><td>${fmtUSD(ccw)}</td>
+      <td>${fmtTok(b.cr)}</td><td>${fmtUSD(ccr)}</td>
+      <td><strong>${fmtUSD(total)}</strong></td>
+      <td>${b.msgs.toLocaleString()}</td>
+    </tr>`;
+
+    grandTotal.input += b.input; grandTotal.output += b.output;
+    grandTotal.cw += b.cw; grandTotal.cr += b.cr;
+    grandTotal.ci += ci; grandTotal.co += co;
+    grandTotal.ccw += ccw; grandTotal.ccr += ccr;
+    grandTotal.total += total; grandTotal.msgs += b.msgs;
+  });
+
+  html += `<tr class="total-row">
+    <td>TOTAL</td>
+    <td>${fmtTok(grandTotal.input)}</td><td>${fmtUSD(grandTotal.ci)}</td>
+    <td>${fmtTok(grandTotal.output)}</td><td>${fmtUSD(grandTotal.co)}</td>
+    <td>${fmtTok(grandTotal.cw)}</td><td>${fmtUSD(grandTotal.ccw)}</td>
+    <td>${fmtTok(grandTotal.cr)}</td><td>${fmtUSD(grandTotal.ccr)}</td>
+    <td><strong>${fmtUSD(grandTotal.total)}</strong></td>
+    <td>${grandTotal.msgs.toLocaleString()}</td>
+  </tr>`;
+
+  document.getElementById('cost-table').innerHTML = html;
+}
+
+function renderTokenMix() {
+  const data = getFilteredData();
+  const dates = getAllDates();
+
+  const types = ['input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens'];
+  const typeColors = { input_tokens: '#58a6ff', output_tokens: '#da7756', cache_write_tokens: '#d2a8ff', cache_read_tokens: '#7ee787' };
+  const typeLabels = { input_tokens: 'Input', output_tokens: 'Output', cache_write_tokens: 'Cache Write', cache_read_tokens: 'Cache Read' };
+
+  const byDate = {};
+  data.forEach(d => {
+    if (!byDate[d.date]) byDate[d.date] = { input_tokens: 0, output_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0 };
+    types.forEach(t => { byDate[d.date][t] += d[t]; });
+  });
+
+  const series = types.map(t => ({
+    label: typeLabels[t], color: typeColors[t],
+    data: dates.map(d => byDate[d] ? byDate[d][t] : 0),
+  }));
+
+  drawBarChart(document.getElementById('mix-chart'), dates, series);
+
+  // Cache efficiency
+  const cacheData = dates.map(d => {
+    if (!byDate[d]) return 0;
+    const total = byDate[d].cache_write_tokens + byDate[d].cache_read_tokens;
+    return total > 0 ? byDate[d].cache_read_tokens / total * 100 : 0;
+  });
+
+  const { ctx, w, h } = setupCanvas(document.getElementById('cache-chart'));
+  const pad = { top: 20, right: 20, bottom: 50, left: 70 };
+  const cw = w - pad.left - pad.right;
+  const ch = h - pad.top - pad.bottom;
+
+  // Grid
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#8b949e'; ctx.font = '11px -apple-system, sans-serif'; ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + ch - (i / 4 * ch);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    ctx.fillText(Math.round(i * 25) + '%', pad.left - 8, y + 4);
+  }
+
+  const barW = cw / dates.length;
+  cacheData.forEach((v, i) => {
+    const x = pad.left + barW * i + 2;
+    const barH = v / 100 * ch;
+    ctx.fillStyle = v > 90 ? '#7ee787' : v > 70 ? '#e3b341' : '#f85149';
+    ctx.fillRect(x, pad.top + ch - barH, barW - 4, barH);
+  });
+
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px -apple-system, sans-serif'; ctx.textAlign = 'center';
+  const skip = dates.length > 20 ? 2 : 1;
+  dates.forEach((d, i) => {
+    if (i % skip !== 0) return;
+    const x = pad.left + barW * i + barW / 2;
+    ctx.save(); ctx.translate(x, pad.top + ch + 14); ctx.rotate(-0.4);
+    ctx.fillText(d.slice(5), 0, 0); ctx.restore();
+  });
+}
+
+function updateAll() {
+  renderStats();
+  renderTimeline();
+  renderModels();
+  renderMachines();
+  renderBreakdown();
+  renderTokenMix();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONTROLS
+// ═══════════════════════════════════════════════════════════════
+function setupToggle(id, stateKey) {
+  document.getElementById(id).querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById(id).querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state[stateKey] = btn.dataset.val;
+      updateAll();
+    });
+  });
+}
+
+setupToggle('metric-toggle', 'metric');
+setupToggle('token-type-toggle', 'tokenType');
+setupToggle('chart-style-toggle', 'chartStyle');
+setupToggle('scale-toggle', 'scale');
+
+function toggleMachine(m) {
+  state.machines[m] = !state.machines[m];
+  document.getElementById('cb-' + m).checked = state.machines[m];
+  updateAll();
+}
+
+// Model checkboxes
+const mcEl = document.getElementById('model-checkboxes');
+allModels.forEach(m => {
+  const div = document.createElement('div');
+  div.className = 'checkbox-row';
+  div.innerHTML = `<input type="checkbox" checked> <span class="dot" style="background:${modelColor(m)}"></span> <span>${modelLabel(m)}</span>`;
+  div.addEventListener('click', () => {
+    state.models[m] = !state.models[m];
+    div.querySelector('input').checked = state.models[m];
+    updateAll();
+  });
+  mcEl.appendChild(div);
+});
+
+// Tabs
+document.getElementById('tab-bar').querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    state.activeTab = btn.dataset.tab;
+    updateAll();
+  });
+});
+
+// Pricing table
+const ptEl = document.getElementById('pricing-table');
+ptEl.innerHTML = `<tr><th>Model</th><th>In</th><th>Out</th><th>CW</th><th>CR</th></tr>` +
+  Object.entries(PRICING).filter(([k]) => k !== '<synthetic>').map(([k, p]) => `
+    <tr>
+      <td style="color:${p.color};font-size:11px">${p.label}</td>
+      <td><input type="number" step="0.01" value="${p.input}" data-model="${k}" data-field="input"></td>
+      <td><input type="number" step="0.01" value="${p.output}" data-model="${k}" data-field="output"></td>
+      <td><input type="number" step="0.01" value="${p.cache_write}" data-model="${k}" data-field="cache_write"></td>
+      <td><input type="number" step="0.001" value="${p.cache_read}" data-model="${k}" data-field="cache_read"></td>
+    </tr>
+  `).join('');
+
+ptEl.querySelectorAll('input').forEach(inp => {
+  inp.addEventListener('change', () => {
+    PRICING[inp.dataset.model][inp.dataset.field] = parseFloat(inp.value) || 0;
+    updateAll();
+  });
+});
+
+// Resize
+window.addEventListener('resize', () => updateAll());
+
+// Initial render
+updateAll();
+</script>
+</body>
+</html>
