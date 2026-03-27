@@ -393,25 +393,6 @@ func TestHandleKey_CtrlCAlwaysQuits(t *testing.T) {
 
 // === Iteration 20h: itoa edge cases ===
 
-func TestItoa(t *testing.T) {
-	tests := []struct {
-		n    int
-		want string
-	}{
-		{0, "0"},
-		{1, "1"},
-		{-1, "-1"},
-		{42, "42"},
-		{-999, "-999"},
-		{100, "100"},
-	}
-	for _, tt := range tests {
-		if got := itoa(tt.n); got != tt.want {
-			t.Errorf("itoa(%d) = %q, want %q", tt.n, got, tt.want)
-		}
-	}
-}
-
 // === Iteration 20i: View with PRs selected ===
 
 func TestView_PRSelected(t *testing.T) {

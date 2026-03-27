@@ -4,6 +4,7 @@ package tui
 import (
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,9 +25,6 @@ type disconnectedMsg struct{}
 
 // reconnectTickMsg triggers a reconnection attempt.
 type reconnectTickMsg struct{}
-
-// glowTickMsg advances the glow sweep animation.
-type glowTickMsg struct{}
 
 // actionResultMsg carries the result of an approve/reject/autopilot action.
 type actionResultMsg struct {
@@ -61,8 +59,6 @@ type Model struct {
 	height       int
 	flash        string // temporary status message
 	flashStyle   lipgloss.Style
-	glowPos      int
-	glowDir      int // 1 or -1 for ping-pong
 	inputMode          bool              // text input active (for + add PR)
 	inputBuffer        string            // text being typed
 	mergePickerVisible bool              // merge method picker showing
@@ -81,16 +77,9 @@ func NewModel(c *client.Client) Model {
 	}
 }
 
-// glowTick returns a command that sends a glowTickMsg every 150ms.
-func glowTick() tea.Cmd {
-	return tea.Tick(150*time.Millisecond, func(_ time.Time) tea.Msg {
-		return glowTickMsg{}
-	})
-}
-
-// Init starts the subscription and the glow animation.
+// Init starts the subscription.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.subscribeCmd(), glowTick())
+	return m.subscribeCmd()
 }
 
 // subscribeCmd attempts to connect and subscribe to the daemon.
@@ -166,23 +155,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reconnectTickMsg:
 		return m, m.subscribeCmd()
 
-	case glowTickMsg:
-		// Advance glow position with ping-pong across max label length.
-		maxLen := 20
-		if m.glowDir == 0 {
-			m.glowDir = 1
-		}
-		m.glowPos += m.glowDir
-		if m.glowPos >= maxLen {
-			m.glowPos = maxLen - 1
-			m.glowDir = -1
-		}
-		if m.glowPos <= 0 {
-			m.glowPos = 0
-			m.glowDir = 1
-		}
-		return m, glowTick()
-
 	case stateMsg:
 		m.sessions = msg.Sessions
 		m.prs = msg.PRs
@@ -193,8 +165,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selectedPRKey != "" {
 			// Selected item was a PR — find it by key.
 			for i, p := range m.prs {
-				key := fmt.Sprintf("%s/%s#%d", p.Owner, p.Repo, p.Number)
-				if key == m.selectedPRKey {
+				if prKey(p) == m.selectedPRKey {
 					m.selectedIdx = len(m.sessions) + i
 					found = true
 					break
@@ -236,7 +207,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Try to find the PR in the current list; it may already be polled.
 			var found *client.TrackedPR
 			for i := range m.prs {
-				if prKey(&m.prs[i]) == msg.prKey {
+				if prKey(m.prs[i]) == msg.prKey {
 					found = &m.prs[i]
 					break
 				}
@@ -421,9 +392,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		} else if pr := m.selectedPR(); pr != nil {
 			// PR autopilot: off → auto → yolo → off.
-			key := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+			k := prKey(*pr)
 			return m, func() tea.Msg {
-				err := m.client.CyclePRAutopilot(key)
+				err := m.client.CyclePRAutopilot(k)
 				return actionResultMsg{action: "PR autopilot", err: err}
 			}
 		}
@@ -488,9 +459,9 @@ end tell`, tabIdx, tabIdx)
 	case "-":
 		// Remove selected PR from tracking.
 		if pr := m.selectedPR(); pr != nil {
-			key := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+			k := prKey(*pr)
 			return m, func() tea.Msg {
-				err := m.client.RemovePR(key)
+				err := m.client.RemovePR(k)
 				return actionResultMsg{action: "removed PR", err: err}
 			}
 		}
@@ -508,13 +479,13 @@ end tell`, tabIdx, tabIdx)
 	case "r":
 		// Toggle code review on/off for selected PR.
 		if pr := m.selectedPR(); pr != nil {
-			key := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+			k := prKey(*pr)
 			label := "review enabled"
 			if pr.ReviewEnabled {
 				label = "review disabled"
 			}
 			return m, func() tea.Msg {
-				err := m.client.TogglePRReview(key)
+				err := m.client.TogglePRReview(k)
 				return actionResultMsg{action: label, err: err}
 			}
 		}
@@ -523,61 +494,26 @@ end tell`, tabIdx, tabIdx)
 		// Set merge method for selected PR — daemon handles the actual merge.
 		if pr := m.selectedPR(); pr != nil {
 			m.mergePickerPR = pr
-			m.mergePickerPRKey = prKey(pr)
+			m.mergePickerPRKey = prKey(*pr)
 			m.mergePickerVisible = true
 			return m, nil
 		}
 
 	case "1":
-		// Merge picker: squash.
 		if m.mergePickerVisible {
-			key := m.mergePickerPRKey
-			m.mergePickerVisible = false
-			m.mergePickerPR = nil
-			m.mergePickerPRKey = ""
-			return m, func() tea.Msg {
-				_ = m.client.SetMergeMethod(key, "squash")
-				return actionResultMsg{action: "merge method: squash"}
-			}
+			return m.handleMergePick("squash", "squash")
 		}
-
 	case "2":
-		// Merge picker: rebase.
 		if m.mergePickerVisible {
-			key := m.mergePickerPRKey
-			m.mergePickerVisible = false
-			m.mergePickerPR = nil
-			m.mergePickerPRKey = ""
-			return m, func() tea.Msg {
-				_ = m.client.SetMergeMethod(key, "rebase")
-				return actionResultMsg{action: "merge method: rebase"}
-			}
+			return m.handleMergePick("rebase", "rebase")
 		}
-
 	case "3":
-		// Merge picker: Aviator.
 		if m.mergePickerVisible {
-			key := m.mergePickerPRKey
-			m.mergePickerVisible = false
-			m.mergePickerPR = nil
-			m.mergePickerPRKey = ""
-			return m, func() tea.Msg {
-				_ = m.client.SetMergeMethod(key, "aviator")
-				return actionResultMsg{action: "merge method: aviator"}
-			}
+			return m.handleMergePick("aviator", "aviator")
 		}
-
 	case "4":
-		// Merge picker: merge commit.
 		if m.mergePickerVisible {
-			key := m.mergePickerPRKey
-			m.mergePickerVisible = false
-			m.mergePickerPR = nil
-			m.mergePickerPRKey = ""
-			return m, func() tea.Msg {
-				_ = m.client.SetMergeMethod(key, "merge")
-				return actionResultMsg{action: "merge method: merge commit"}
-			}
+			return m.handleMergePick("merge", "merge commit")
 		}
 
 	case "d":
@@ -621,24 +557,6 @@ end tell`, tabIdx, tabIdx)
 	return m, nil
 }
 
-// approveAllSafe sends approve for every session that has only safe pending tools.
-func (m Model) approveAllSafe() tea.Cmd {
-	var cmds []tea.Cmd
-	for _, s := range m.sessions {
-		for _, pt := range s.PendingTools {
-			if pt.Safety != "destructive" {
-				sid := s.SessionID
-				cmds = append(cmds, func() tea.Msg {
-					err := m.client.Approve(sid)
-					return actionResultMsg{action: "approve", err: err}
-				})
-				break
-			}
-		}
-	}
-	return tea.Batch(cmds...)
-}
-
 // selected returns the currently selected session, or nil.
 func (m Model) selected() *client.Session {
 	if m.selectedIdx >= 0 && m.selectedIdx < len(m.sessions) {
@@ -659,7 +577,7 @@ func (m Model) selectedPR() *client.TrackedPR {
 }
 
 // prKey returns the canonical "owner/repo#N" key for a PR.
-func prKey(pr *client.TrackedPR) string {
+func prKey(pr client.TrackedPR) string {
 	return fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
 }
 
@@ -686,18 +604,27 @@ func (m Model) totalItems() int {
 
 // trackSelection updates selectedSID/selectedPRKey based on current selectedIdx.
 func (m *Model) trackSelection() {
-	if m.selectedIdx < len(m.sessions) {
-		if m.selectedIdx >= 0 && m.selectedIdx < len(m.sessions) {
-			m.selectedSID = m.sessions[m.selectedIdx].SessionID
-			m.selectedPRKey = ""
-		}
+	if m.selectedIdx >= 0 && m.selectedIdx < len(m.sessions) {
+		m.selectedSID = m.sessions[m.selectedIdx].SessionID
+		m.selectedPRKey = ""
 	} else {
 		prIdx := m.selectedIdx - len(m.sessions)
 		if prIdx >= 0 && prIdx < len(m.prs) {
-			p := m.prs[prIdx]
-			m.selectedPRKey = fmt.Sprintf("%s/%s#%d", p.Owner, p.Repo, p.Number)
+			m.selectedPRKey = prKey(m.prs[prIdx])
 			m.selectedSID = ""
 		}
+	}
+}
+
+// handleMergePick handles a merge method picker selection.
+func (m Model) handleMergePick(method, label string) (tea.Model, tea.Cmd) {
+	key := m.mergePickerPRKey
+	m.mergePickerVisible = false
+	m.mergePickerPR = nil
+	m.mergePickerPRKey = ""
+	return m, func() tea.Msg {
+		_ = m.client.SetMergeMethod(key, method)
+		return actionResultMsg{action: "merge method: " + label}
 	}
 }
 
@@ -716,7 +643,7 @@ func (m Model) View() string {
 	}
 
 	// Render bottom sections first to calculate remaining height.
-	strip := renderUnifiedStrip(m.sessions, m.prs, m.selectedIdx, w, m.glowPos)
+	strip := renderUnifiedStrip(m.sessions, m.prs, m.selectedIdx, w)
 	stripHeight := lipgloss.Height(strip)
 
 	isSession := m.isSessionSelected()
@@ -759,13 +686,7 @@ func (m Model) View() string {
 			lipgloss.NewStyle().Foreground(colorDimFg).Render("  (Enter add, Esc cancel)") + "\n" +
 			lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", w))
 	} else {
-		failingPRs := 0
-		for _, p := range m.prs {
-			if p.State == "checks_failing" {
-				failingPRs++
-			}
-		}
-		statusLine = renderStatusBar(m.connected, m.sessions, m.prs, failingPRs, m.flash, m.flashStyle, m.defaultAutopilot, w)
+		statusLine = renderStatusBar(m.connected, m.sessions, m.prs, m.flash, m.flashStyle, m.defaultAutopilot, w)
 	}
 	statusHeight := lipgloss.Height(statusLine)
 
@@ -802,7 +723,7 @@ func (m Model) View() string {
 }
 
 // renderStatusBar renders the top status bar with branding, connection info, and flash.
-func renderStatusBar(connected bool, sessions []client.Session, prs []client.TrackedPR, failingPRs int, flash string, flashStyle lipgloss.Style, defaultAutopilot string, width int) string {
+func renderStatusBar(connected bool, sessions []client.Session, prs []client.TrackedPR, flash string, flashStyle lipgloss.Style, defaultAutopilot string, width int) string {
 	logo := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorAccent).
@@ -825,19 +746,20 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 
 	prCount := ""
 	prBreakdownStr := ""
+	failingPRs := 0
 	if len(prs) > 0 {
 		prCount = "  " + lipgloss.NewStyle().
 			Foreground(colorDimFg).
 			Render(pluralize(len(prs), "PR", "PRs"))
 
 		// PR state breakdown: passing / failing / running counts.
-		passing, failing, running, merged := 0, 0, 0, 0
+		passing, running, merged := 0, 0, 0
 		for _, p := range prs {
 			switch p.State {
 			case "checks_passing", "approved":
 				passing++
 			case "checks_failing":
-				failing++
+				failingPRs++
 			case "checks_running":
 				running++
 			case "merged":
@@ -849,9 +771,9 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorRunning).
 				Render(fmt.Sprintf("%d\u2713", passing)))
 		}
-		if failing > 0 {
+		if failingPRs > 0 {
 			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorDestructive).
-				Render(fmt.Sprintf("%d\u2717", failing)))
+				Render(fmt.Sprintf("%d\u2717", failingPRs)))
 		}
 		if running > 0 {
 			prParts = append(prParts, lipgloss.NewStyle().Foreground(colorWaiting).
@@ -898,7 +820,6 @@ func renderStatusBar(connected bool, sessions []client.Session, prs []client.Tra
 
 	failingStr := ""
 	if failingPRs > 0 {
-		// Badge-style: dark text on red background, consistent with pending badge.
 		failingBadge := lipgloss.NewStyle().
 			Foreground(lipgloss.ANSIColor(0)).
 			Background(colorDestructive).
@@ -1026,27 +947,7 @@ func pluralize(n int, singular, plural string) string {
 	if n == 1 {
 		return "1 " + singular
 	}
-	return itoa(n) + " " + plural
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	s := ""
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	for n > 0 {
-		s = string(rune('0'+n%10)) + s
-		n /= 10
-	}
-	if neg {
-		s = "-" + s
-	}
-	return s
+	return strconv.Itoa(n) + " " + plural
 }
 
 var (

@@ -9,13 +9,6 @@ import (
 	"github.com/pchaganti/claude-session-manager/tui/internal/client"
 )
 
-func formatDuration(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-	return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
-}
-
 // renderPRZoom renders the PR detail panel.
 func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) string {
 	if width < 10 || height < 4 {
@@ -99,7 +92,15 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 		bodyLines = append(bodyLines, sep)
 	}
 
-	// ── Merge readiness summary line (skip for done PRs) ──
+	// Pre-compute checks passing/total (used in both summary and details).
+	checksPassing, checksTotal := 0, len(pr.Checks)
+	for _, c := range pr.Checks {
+		if c.Conclusion == "SUCCESS" || c.Conclusion == "NEUTRAL" {
+			checksPassing++
+		}
+	}
+
+	// Merge readiness summary line (skip for done PRs).
 	if !isDone {
 		var summaryParts []string
 
@@ -127,28 +128,20 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 				lipgloss.NewStyle().Foreground(colorDimFg).Render("○ no review"))
 		}
 
-		// Checks summary.
-		if len(pr.Checks) > 0 {
-			passing, total := 0, len(pr.Checks)
-			for _, c := range pr.Checks {
-				if c.Conclusion == "SUCCESS" || c.Conclusion == "NEUTRAL" {
-					passing++
-				}
-			}
-			if passing == total {
+		if checksTotal > 0 {
+			if checksPassing == checksTotal {
 				summaryParts = append(summaryParts,
 					styleSafe.Render("✓")+" "+
 						lipgloss.NewStyle().Foreground(colorDimFg).
-						Render(fmt.Sprintf("checks (%d/%d)", passing, total)))
+						Render(fmt.Sprintf("checks (%d/%d)", checksPassing, checksTotal)))
 			} else {
 				summaryParts = append(summaryParts,
 					styleDestructive.Render("✗")+" "+
 						lipgloss.NewStyle().Foreground(colorDestructive).
-						Render(fmt.Sprintf("checks (%d/%d)", passing, total)))
+						Render(fmt.Sprintf("checks (%d/%d)", checksPassing, checksTotal)))
 			}
 		}
 
-		// Mergeable.
 		switch pr.Mergeable {
 		case "MERGEABLE":
 			summaryParts = append(summaryParts,
@@ -160,7 +153,6 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 					lipgloss.NewStyle().Foreground(colorDestructive).Render("conflicts"))
 		}
 
-		// Merge method.
 		if pr.MergeMethod != "" {
 			summaryParts = append(summaryParts,
 				lipgloss.NewStyle().Foreground(colorAccent).Render("⎇ "+pr.MergeMethod))
@@ -177,15 +169,9 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 	}
 
 	// Checks section.
-	if len(pr.Checks) > 0 {
-		passing, total := 0, len(pr.Checks)
-		for _, c := range pr.Checks {
-			if c.Conclusion == "SUCCESS" || c.Conclusion == "NEUTRAL" {
-				passing++
-			}
-		}
+	if checksTotal > 0 {
 		bodyLines = append(bodyLines, styleSectionLabel.Render(
-			fmt.Sprintf("── Checks (%d/%d passing)", passing, total)))
+			fmt.Sprintf("── Checks (%d/%d passing)", checksPassing, checksTotal)))
 
 		for _, c := range pr.Checks {
 			icon := checkIcon(c)
@@ -213,7 +199,7 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 		bodyLines = append(bodyLines, fmt.Sprintf("  %s %s running (%s)",
 			lipgloss.NewStyle().Foreground(colorWaiting).Render("🤖"),
 			lipgloss.NewStyle().Foreground(colorFg).Render(agentLabel),
-			lipgloss.NewStyle().Foreground(colorDimFg).Render(formatDuration(elapsed)),
+			lipgloss.NewStyle().Foreground(colorDimFg).Render(formatAge(elapsed)),
 		))
 	}
 
@@ -265,12 +251,8 @@ func renderPRZoom(pr client.TrackedPR, width, height int, scrollOffset int) stri
 			state := lipgloss.NewStyle().Foreground(colorDimFg).Render(strings.ToLower(r.State))
 			body := ""
 			if r.Body != "" {
-				bodyTrunc := r.Body
-				if len(bodyTrunc) > 50 {
-					bodyTrunc = bodyTrunc[:50] + "…"
-				}
 				body = "  " + lipgloss.NewStyle().Foreground(colorDimFg).Italic(true).
-					Render("\""+bodyTrunc+"\"")
+					Render("\""+truncateMiddle(r.Body, 50)+"\"")
 			}
 			at := ""
 			if r.At != "" {

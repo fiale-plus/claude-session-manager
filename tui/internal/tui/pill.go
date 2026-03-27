@@ -81,8 +81,8 @@ func pillName(s client.Session) string {
 
 // renderPill renders a single session pill with state-colored background,
 // icon, name, and optional pending-tool count badge.
-func renderPill(s client.Session, selected bool, glowPos int) string {
-	return renderPillWithName(s, pillName(s), selected, glowPos)
+func renderPill(s client.Session, selected bool, _ int) string {
+	return renderPillWithName(s, pillName(s), selected)
 }
 
 // isPassiveState returns true if the session state is idle or dead (not actively working).
@@ -107,7 +107,7 @@ func pillNameMaxLen(state string, selected bool) int {
 // renderPillWithName renders a pill using a pre-computed display name
 // (which may include a disambiguator).
 // Name length is tiered by state and selection for visual hierarchy.
-func renderPillWithName(s client.Session, displayName string, selected bool, glowPos int) string {
+func renderPillWithName(s client.Session, displayName string, selected bool) string {
 	sc := stateColor(s.State)
 	dimBg := stateColorDim(s.State)
 	icon := stateIcon(s.State)
