@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -122,7 +123,7 @@ func TestRenderZoom_ManyActivities_ShowsOverflow(t *testing.T) {
 		s.Activities = append(s.Activities, client.Activity{
 			Timestamp:    now.Add(-time.Duration(15-i) * time.Minute),
 			ActivityType: "tool_use",
-			Summary:      "Action " + itoa(i),
+			Summary:      "Action " + strconv.Itoa(i),
 		})
 	}
 
@@ -205,8 +206,8 @@ func TestToolDetail_Truncation(t *testing.T) {
 	if len(got) > 20 {
 		t.Errorf("toolDetail length = %d, want <= 20", len(got))
 	}
-	if !strings.HasSuffix(got, "...") {
-		t.Error("truncated toolDetail should end with '...'")
+	if !strings.Contains(got, "\u2026") {
+		t.Error("truncated toolDetail should contain ellipsis")
 	}
 }
 

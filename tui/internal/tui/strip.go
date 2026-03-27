@@ -11,8 +11,8 @@ import (
 )
 
 // renderStrip renders the horizontal session pill strip at the bottom (sessions only).
-func renderStrip(sessions []client.Session, selectedIdx int, width int, glowPos int) string {
-	return renderUnifiedStrip(sessions, nil, selectedIdx, width, glowPos)
+func renderStrip(sessions []client.Session, selectedIdx int, width int, _ int) string {
+	return renderUnifiedStrip(sessions, nil, selectedIdx, width)
 }
 
 // disambiguateNames detects duplicate pill names across sessions and appends
@@ -20,17 +20,18 @@ func renderStrip(sessions []client.Session, selectedIdx int, width int, glowPos 
 func disambiguateNames(sessions []client.Session) map[string]string {
 	result := make(map[string]string, len(sessions))
 
-	// Count how many sessions share each name.
+	// Compute pill names once.
+	names := make([]string, len(sessions))
 	nameCounts := make(map[string]int)
-	for _, s := range sessions {
-		name := pillName(s)
-		nameCounts[name]++
+	for i, s := range sessions {
+		names[i] = pillName(s)
+		nameCounts[names[i]]++
 	}
 
 	// For duplicates, append disambiguator.
 	nameSeq := make(map[string]int)
-	for _, s := range sessions {
-		name := pillName(s)
+	for i, s := range sessions {
+		name := names[i]
 		if nameCounts[name] > 1 {
 			nameSeq[name]++
 			if s.PID > 0 {
@@ -70,7 +71,7 @@ func statePriority(s client.Session) int {
 // renderUnifiedStrip renders sessions + PRs in one strip with a separator.
 // It caps visible pills to fit within the given width, showing a "+N"
 // overflow indicator when pills are hidden.
-func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selectedIdx int, width int, glowPos int) string {
+func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selectedIdx int, width int) string {
 	if len(sessions) == 0 && len(prs) == 0 {
 		emptyStyle := lipgloss.NewStyle().Foreground(colorDimFg).Italic(true)
 		return styleStripBar.Width(width).Render(
@@ -151,7 +152,7 @@ func renderUnifiedStrip(sessions []client.Session, prs []client.TrackedPR, selec
 	// Build all pill entries.
 	var allPills []pillEntry
 	for i, s := range sessions {
-		p := renderPillWithName(s, nameMap[s.SessionID], i == selectedIdx, glowPos)
+		p := renderPillWithName(s, nameMap[s.SessionID], i == selectedIdx)
 		allPills = append(allPills, pillEntry{
 			rendered:   p,
 			width:      lipgloss.Width(p),

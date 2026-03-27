@@ -18,12 +18,8 @@ func renderZoom(s client.Session, width, height int, scrollOffset int, defaultAu
 
 	innerWidth := width - 4
 
-	// ═══════════════════════════════════════════════════════════
-	// FIXED HEADER — 2 lines, always visible
-	// ═══════════════════════════════════════════════════════════
+	// Header
 	var headerLines []string
-
-	// Line 1: name  STATE  [AUTOPILOT|YOLO]  ▸ branch
 	stateStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.ANSIColor(0)).
 		Background(stateColor(s.State)).
@@ -63,7 +59,6 @@ func renderZoom(s client.Session, width, height int, scrollOffset int, defaultAu
 	}
 	headerLines = append(headerLines, line1)
 
-	// Line 2: PID  cwd  ⏱ ago
 	var infoParts []string
 	infoParts = append(infoParts, fmt.Sprintf("PID %d", s.PID))
 	infoParts = append(infoParts, truncateMiddle(s.CWD, innerWidth-35))
@@ -77,9 +72,7 @@ func renderZoom(s client.Session, width, height int, scrollOffset int, defaultAu
 	headerHeight := len(headerLines)
 	bodyHeight := height - headerHeight
 
-	// ═══════════════════════════════════════════════════════════
-	// SCROLLABLE BODY — activities, pending, last output
-	// ═══════════════════════════════════════════════════════════
+	// Body
 	var bodyLines []string
 
 	sep := lipgloss.NewStyle().Foreground(colorBorder).
@@ -172,11 +165,7 @@ func renderZoom(s client.Session, width, height int, scrollOffset int, defaultAu
 		}
 	}
 
-	// ═══════════════════════════════════════════════════════════
-	// SCROLL + CLIP
-	// ═══════════════════════════════════════════════════════════
-
-	// Clamp scroll offset
+	// Scroll + clip
 	maxScroll := len(bodyLines) - bodyHeight
 	if maxScroll < 0 {
 		maxScroll = 0
@@ -198,10 +187,7 @@ func renderZoom(s client.Session, width, height int, scrollOffset int, defaultAu
 	// Scroll indicator
 	scrollInfo := ""
 	if maxScroll > 0 {
-		pct := 0
-		if maxScroll > 0 {
-			pct = scrollOffset * 100 / maxScroll
-		}
+		pct := scrollOffset * 100 / maxScroll
 		if scrollOffset > 0 {
 			scrollInfo = lipgloss.NewStyle().Foreground(colorDimFg).
 				Render(fmt.Sprintf(" \u2191\u2193 %d%%", pct))
@@ -213,9 +199,7 @@ func renderZoom(s client.Session, width, height int, scrollOffset int, defaultAu
 		headerLines[len(headerLines)-1] += scrollInfo
 	}
 
-	// ═══════════════════════════════════════════════════════════
-	// ASSEMBLE
-	// ═══════════════════════════════════════════════════════════
+	// Assemble
 	all := append(headerLines, visibleBody...)
 
 	// Hard clip to exact height (header + body, no overflow).
@@ -282,11 +266,7 @@ func toolDetail(pt client.PendingTool, maxLen int) string {
 	}
 	for _, key := range []string{"command", "file_path", "pattern", "query", "description", "prompt"} {
 		if v, ok := pt.ToolInput[key]; ok {
-			s := fmt.Sprintf("%v", v)
-			if len(s) > maxLen && maxLen > 5 {
-				s = s[:maxLen-3] + "..."
-			}
-			return s
+			return truncateMiddle(fmt.Sprintf("%v", v), maxLen)
 		}
 	}
 	return ""

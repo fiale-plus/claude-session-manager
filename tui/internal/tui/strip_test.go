@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -69,9 +70,9 @@ func TestRenderStrip_ManySessions(t *testing.T) {
 	var sessions []client.Session
 	for i := 0; i < 12; i++ {
 		sessions = append(sessions, client.Session{
-			SessionID:   "s" + itoa(i),
+			SessionID:   "s" + strconv.Itoa(i),
 			State:       "running",
-			ProjectName: "proj-" + itoa(i),
+			ProjectName: "proj-" + strconv.Itoa(i),
 		})
 	}
 
@@ -210,7 +211,7 @@ func TestRenderUnifiedStrip_SessionsAndPRs(t *testing.T) {
 		{Owner: "owner", Repo: "project", Number: 7, Title: "Add feature", State: "checks_failing"},
 	}
 
-	out := renderUnifiedStrip(sessions, prs, 0, 120, 0)
+	out := renderUnifiedStrip(sessions, prs, 0, 120)
 	if out == "" {
 		t.Error("unified strip should produce output")
 	}
@@ -225,7 +226,7 @@ func TestRenderUnifiedStrip_SessionsOnly(t *testing.T) {
 		{SessionID: "s1", State: "running", ProjectName: "alpha"},
 	}
 
-	out := renderUnifiedStrip(sessions, nil, 0, 100, 0)
+	out := renderUnifiedStrip(sessions, nil, 0, 100)
 	if out == "" {
 		t.Error("sessions-only strip should produce output")
 	}
@@ -241,14 +242,14 @@ func TestRenderUnifiedStrip_PRsOnly(t *testing.T) {
 	}
 
 	// Use selectedIdx=-1 so no PR is selected (avoids RoundedBorder which contains │).
-	out := renderUnifiedStrip(nil, prs, -1, 100, 0)
+	out := renderUnifiedStrip(nil, prs, -1, 100)
 	if out == "" {
 		t.Error("PRs-only strip should produce output")
 	}
 }
 
 func TestRenderUnifiedStrip_Empty(t *testing.T) {
-	out := renderUnifiedStrip(nil, nil, 0, 100, 0)
+	out := renderUnifiedStrip(nil, nil, 0, 100)
 	if out == "" {
 		t.Error("empty strip should produce output (empty state message)")
 	}
@@ -266,7 +267,7 @@ func TestRenderUnifiedStrip_PRSelected(t *testing.T) {
 	}
 
 	// Selected index = 1 means PR is selected (sessions count = 1).
-	out := renderUnifiedStrip(sessions, prs, 1, 120, 0)
+	out := renderUnifiedStrip(sessions, prs, 1, 120)
 	if out == "" {
 		t.Error("strip with PR selected should produce output")
 	}
@@ -280,8 +281,8 @@ func TestRenderUnifiedStrip_HeightConsistentWithPRs(t *testing.T) {
 		{Owner: "o", Repo: "r", Number: 1, Title: "PR", State: "checks_passing"},
 	}
 
-	h0 := lipgloss.Height(renderUnifiedStrip(sessions, prs, 0, 120, 0))
-	h1 := lipgloss.Height(renderUnifiedStrip(sessions, prs, 1, 120, 0))
+	h0 := lipgloss.Height(renderUnifiedStrip(sessions, prs, 0, 120))
+	h1 := lipgloss.Height(renderUnifiedStrip(sessions, prs, 1, 120))
 
 	// Height might differ slightly due to PR selected border, but should be close.
 	// What matters: both produce valid output.
@@ -387,14 +388,14 @@ func TestRenderUnifiedStrip_OverflowIndicator(t *testing.T) {
 	var sessions []client.Session
 	for i := 0; i < 10; i++ {
 		sessions = append(sessions, client.Session{
-			SessionID:   "s" + itoa(i),
+			SessionID:   "s" + strconv.Itoa(i),
 			State:       "running",
-			ProjectName: "project-number-" + itoa(i),
+			ProjectName: "project-number-" + strconv.Itoa(i),
 			PID:         1000 + i,
 		})
 	}
 
-	out := renderUnifiedStrip(sessions, nil, 0, 60, 0)
+	out := renderUnifiedStrip(sessions, nil, 0, 60)
 	h := lipgloss.Height(out)
 	// Strip must remain a single content line (plus border).
 	if h > 2 {
@@ -407,15 +408,15 @@ func TestRenderUnifiedStrip_SelectedAlwaysVisible(t *testing.T) {
 	var sessions []client.Session
 	for i := 0; i < 10; i++ {
 		sessions = append(sessions, client.Session{
-			SessionID:   "s" + itoa(i),
+			SessionID:   "s" + strconv.Itoa(i),
 			State:       "running",
-			ProjectName: "proj-" + itoa(i),
+			ProjectName: "proj-" + strconv.Itoa(i),
 			PID:         1000 + i,
 		})
 	}
 
 	// Select last session.
-	out := renderUnifiedStrip(sessions, nil, 9, 60, 0)
+	out := renderUnifiedStrip(sessions, nil, 9, 60)
 	// Should contain the selected session name.
 	if !strings.Contains(out, "proj-9") {
 		t.Error("selected pill should be visible even with overflow")
