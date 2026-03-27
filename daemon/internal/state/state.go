@@ -307,6 +307,10 @@ func (m *Manager) ShouldAutoApprove(sid string, safety model.ToolSafety) (bool, 
 		// state was persisted from a previous run.
 		mode = persisted
 	}
+	// Fall back to default autopilot for sessions not yet registered.
+	if mode == "" {
+		mode = m.config.DefaultAutopilot
+	}
 	switch mode {
 	case model.AutopilotOn:
 		// ON: approve safe+unknown, block destructive.
